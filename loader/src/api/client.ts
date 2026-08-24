@@ -2,6 +2,7 @@ import {API_BASE_URL} from "../config";
 import {log} from "../services/logger";
 import {authSession} from "../auth/session";
 import type {ApiEnvelope,Game,LoaderConfig,User} from "../types";
+import type {AdminPanelData} from "../admin/types";
 
 export class ApiError extends Error{
   constructor(message:string,public status=0){super(message);this.name="ApiError";}
@@ -19,7 +20,7 @@ function userMessage(error:unknown,status=0){
 async function request<T>(path:string,init:RequestInit={}):Promise<T>{
   await initialize();
   const headers=new Headers(init.headers);headers.set("Accept","application/json");
-  if(init.body&&!headers.has("Content-Type"))headers.set("Content-Type","application/json");
+  if(init.body&&!(init.body instanceof FormData)&&!headers.has("Content-Type"))headers.set("Content-Type","application/json");
   if(authSession.bearer())headers.set("Authorization","Bearer "+authSession.bearer());
   const controller=new AbortController();const timer=window.setTimeout(()=>controller.abort(),20000);
   try{
@@ -53,6 +54,9 @@ export const api={
   downloadToken:(id:number)=>request<{url:string;expires_in:number}>("/patches/"+id+"/download-token",{method:"POST"}),
   config:()=>request<LoaderConfig>("/loader/config"),
   latest:(channel="stable")=>request<Record<string,unknown>|null>("/loader/latest?channel="+channel),
+  adminPanel:()=>request<AdminPanelData>("/admin/panel"),
+  adminAction:<T=unknown>(action:string,payload:Record<string,unknown>={})=>request<T>("/admin/action",{method:"POST",body:JSON.stringify({action,...payload})}),
+  adminUpload:<T=unknown>(action:string,form:FormData)=>{form.set("action",action);return request<T>("/admin/action",{method:"POST",body:form})},
   logout:async()=>{try{if(authSession.hasToken())await request("/auth/logout",{method:"POST"})}finally{await authSession.clear();await log("info","login","Kullanıcı çıkışı tamamlandı")}},
   hasToken:()=>authSession.hasToken(),
   onUnauthorized:(handler:(message:string)=>void)=>authSession.onExpired(handler)

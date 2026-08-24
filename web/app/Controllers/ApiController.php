@@ -8,8 +8,10 @@ use App\Core\Env;
 use App\Core\Http;
 use App\Core\RateLimiter;
 use App\Services\AuthService;
+use App\Services\AdminService;
 use App\Services\CatalogService;
 use App\Services\ManifestService;
+use App\Services\ManifestValidator;
 use App\Services\PatchStorage;
 
 final class ApiController
@@ -27,6 +29,8 @@ final class ApiController
             if($method==='GET'&&$path==='/api/auth/me')$this->me();
             if($method==='GET'&&$path==='/api/user/me')$this->me();
             if($method==='GET'&&$path==='/api/games')$this->games();
+            if($method==='GET'&&$path==='/api/admin/panel')$this->adminPanel();
+            if($method==='POST'&&$path==='/api/admin/action')$this->adminAction();
             if($method==='GET'&&preg_match('#^/api/games/(\d+)$#',$path,$m))$this->game((int)$m[1]);
             if($method==='GET'&&preg_match('#^/api/games/(\d+)/patch$#',$path,$m))$this->gamePatch((int)$m[1]);
             if($method==='GET'&&preg_match('#^/api/patches/(\d+)/manifest$#',$path,$m))$this->manifest((int)$m[1]);
@@ -54,6 +58,34 @@ final class ApiController
     }
     private function logout():never{$this->auth->requireUser();$this->auth->logout();Http::json(['ok'=>true,'data'=>null]);}
     private function me():never{Http::json(['ok'=>true,'data'=>$this->auth->requireUser()]);}
+    private function adminPanel():never{$this->auth->requireAdmin();Http::json(['ok'=>true,'data'=>(new AdminService())->panelData()]);}
+    private function adminAction():never
+    {
+        RateLimiter::enforce('admin-action',180,60);$user=$this->auth->requireAdmin();$body=Http::body();$action=(string)($body['action']??'');$admin=new AdminService();$uid=(int)$user['id'];
+        $result=match($action){
+            'save_game'=>['id'=>$admin->saveGame($body['game']??[],$uid)],
+            'duplicate_game'=>['id'=>$admin->duplicateGame((int)($body['game_id']??0),$uid)],
+            'set_game_status'=>(function()use($admin,$body,$uid){$admin->setGameStatus((int)($body['game_id']??0),(bool)($body['active']??false),$uid);return null;})(),
+            'delete_game'=>(function()use($admin,$body,$uid){$admin->deleteGame((int)($body['game_id']??0),$uid);return null;})(),
+            'upload_game_image'=>['path'=>$admin->saveGameImage((int)($_POST['game_id']??0),(string)($_POST['kind']??''),$_FILES['image']??[],$uid)],
+            'delete_game_image'=>(function()use($admin,$body,$uid){$admin->deleteGameImage((int)($body['game_id']??0),(string)($body['kind']??''),$uid);return null;})(),
+            'create_patch'=>['id'=>$admin->createPatchVersion($_POST,$_FILES['archive']??[],$uid)],
+            'load_patch_builder'=>$admin->builderData((int)($body['version_id']??0)),
+            'save_actions'=>(function()use($admin,$body,$uid){$admin->saveActions((int)($body['version_id']??0),$body['actions']??[],$uid);return null;})(),
+            'test_manifest'=>(function()use($body){$manifest=(new ManifestService())->build((int)($body['version_id']??0));return ['manifest'=>$manifest,'errors'=>(new ManifestValidator())->validate($manifest)];})(),
+            'publish_patch'=>(function()use($admin,$body,$uid){$admin->publish((int)($body['version_id']??0),$uid);return null;})(),
+            'rollback_patch'=>(function()use($admin,$body,$uid){$admin->rollbackPatch((int)($body['version_id']??0),$uid);return null;})(),
+            'set_patch_status'=>(function()use($admin,$body,$uid){$admin->setPatchStatus((int)($body['version_id']??0),(string)($body['status']??''),$uid);return null;})(),
+            'save_category'=>['id'=>$admin->saveCategory($body['category']??[],$uid)],
+            'delete_category'=>(function()use($admin,$body,$uid){$admin->deleteCategory((int)($body['id']??0),$uid);return null;})(),
+            'save_announcement'=>['id'=>$admin->saveAnnouncement($body['announcement']??[],$uid)],
+            'delete_announcement'=>(function()use($admin,$body,$uid){$admin->deleteAnnouncement((int)($body['id']??0),$uid);return null;})(),
+            'save_banner'=>['id'=>$admin->saveBanner($_POST,$_FILES['image']??[],$uid)],
+            'delete_banner'=>(function()use($admin,$body,$uid){$admin->deleteBanner((int)($body['id']??0),$uid);return null;})(),
+            default=>throw new \DomainException('Bilinmeyen admin işlemi.'),
+        };
+        Http::json(['ok'=>true,'data'=>$result]);
+    }
     private function games():never{$u=$this->auth->requireUser();$games=(new CatalogService())->games($u,['q'=>trim((string)($_GET['q']??'')),'access'=>$_GET['access']??null]);Http::json(['ok'=>true,'data'=>$games,'meta'=>['count'=>count($games)]]);}
     private function game(int$id):never{$u=$this->auth->requireUser();$g=(new CatalogService())->game($id,$u);if(!$g)Http::error('Oyun bulunamadı.',404);Http::json(['ok'=>true,'data'=>$g]);}
     private function gamePatch(int$id):never{$u=$this->auth->requireUser();$p=(new CatalogService())->activePatch($id,$u);if(!$p)Http::error('Yayınlanmış patch bulunamadı.',404);if($p['access_type']==='premium'&&!$this->auth->canAccessPremium($u))Http::error('Premium abonelik gerekli.',403);Http::json(['ok'=>true,'data'=>$p]);}

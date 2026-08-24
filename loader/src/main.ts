@@ -1,4 +1,5 @@
 import "./styles.css";
+import "./admin/admin.css";
 import {api} from "./api/client";
 import {WEB_BASE_URL} from "./config";
 import {patchService} from "./services/patch";
@@ -7,6 +8,8 @@ import {filterCatalog} from "./catalog";
 import {mountBackgroundMedia} from "./background";
 import {validateRegistration} from "./auth/validation";
 import {cache,state} from "./stores/app";
+import {canManage} from "./admin/access";
+import {renderAdminPanel} from "./admin/panel";
 import type {Game,LoaderConfig,OperationProgress} from "./types";
 
 const app=document.querySelector<HTMLDivElement>("#app")!;
@@ -45,6 +48,7 @@ function shell(){
   const config=state.config||fallbackConfig();document.documentElement.style.setProperty("--accent",config.accent_color||"#b7f34a");
   const subscription=state.user?.subscription;
   app.innerHTML=`<div class="shell"><header><button class="brand nav-button" data-view="home"><span>A</span>${escapeHtml(config.app_name)}</button><nav><button class="nav-button active" data-view="home">Ana Sayfa</button><button class="nav-button" data-view="library">Kütüphane</button><button id="backup-nav">Yedekler</button></nav><div class="user"><div><b>${escapeHtml(state.user?.display_name)}</b><small>${state.user?.premium?escapeHtml(subscription?.plan_name||"Premium"):"Ücretsiz"}${subscription?.ends_at?" · "+date(subscription.ends_at):""}</small></div><button id="logout">Çıkış</button></div></header><main id="main-content"></main><aside class="rightbar"><section class="profile-card"><span>${state.user?.premium?"PREMIUM":"FREE"}</span><b>${escapeHtml(state.user?.display_name)}</b><small>${escapeHtml(state.user?.email)}</small></section><h3>Duyurular</h3><div id="announcements"></div><section class="translation-summary"><h3>Çeviri İlerlemeleri</h3><div id="translation-summary"></div></section><div class="support-card"><span>YARDIMA MI İHTİYACIN VAR?</span><b>Destek merkezine ulaş</b><button id="support-link">Destek →</button></div></aside></div><div id="modal-root"></div><div id="dev-panel"></div>`;
+  if(canManage(state.user)){const button=document.createElement("button");button.className="nav-button";button.dataset.view="admin";button.textContent="Yönetim";document.querySelector(".shell nav")?.append(button)}
   mountBackgroundMedia(document.querySelector<HTMLElement>(".shell")!,config.branding?.library_background,asset,55);
   document.querySelector("#logout")!.addEventListener("click",async()=>{try{await api.logout()}catch{}state.user=null;state.selected=null;loginView()});
   document.querySelector("#backup-nav")!.addEventListener("click",showBackups);
@@ -59,7 +63,10 @@ function shell(){
 
 function developerShortcut(event:KeyboardEvent){if(event.ctrlKey&&event.shiftKey&&event.key.toLowerCase()==="d"){state.developer=!state.developer;renderDeveloper()}}
 function setActiveNav(view:string){document.querySelectorAll<HTMLButtonElement>(".nav-button").forEach(button=>button.classList.toggle("active",button.dataset.view===view))}
-function showView(view:string){currentView=view==="library"?"library":"home";setActiveNav(currentView);currentView==="library"?renderLibrary():renderHome()}
+function showView(view:string){
+  if(view==="admin"&&canManage(state.user)){currentView="admin";setActiveNav(currentView);void renderAdminPanel(document.querySelector<HTMLElement>("#main-content")!,async()=>{state.games=await api.games();cache.saveGames(state.games);await loadConfig()},notify);return}
+  currentView=view==="library"?"library":"home";setActiveNav(currentView);currentView==="library"?renderLibrary():renderHome();
+}
 
 function renderHome(){
   const config=state.config||fallbackConfig();const featured=(config.banners||[])[0];const background=asset(featured?.image_path||config.banner_url)||asset("/assets/placeholders/banner-generic.svg");

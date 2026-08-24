@@ -29,10 +29,10 @@ final class AdminService
     public function panelData(): array
     {
         $pdo=Database::connection();
-        $games=$pdo->query('SELECT g.*,GROUP_CONCAT(c.name SEPARATOR ", ") categories FROM games g LEFT JOIN game_categories gc ON gc.game_id=g.id LEFT JOIN categories c ON c.id=gc.category_id GROUP BY g.id ORDER BY g.updated_at DESC LIMIT 500')->fetchAll();
+        $games=$pdo->query('SELECT g.*,GROUP_CONCAT(c.name SEPARATOR ", ") categories,GROUP_CONCAT(c.id) category_ids_csv FROM games g LEFT JOIN game_categories gc ON gc.game_id=g.id LEFT JOIN categories c ON c.id=gc.category_id GROUP BY g.id ORDER BY g.updated_at DESC LIMIT 500')->fetchAll();
         $rules=$pdo->query("SELECT game_id,rule_type,rule_value FROM game_detection_rules WHERE rule_type IN ('required_file','optional_file') ORDER BY sort_order,id")->fetchAll();
         $rulesByGame=[];foreach($rules as $rule)$rulesByGame[(int)$rule['game_id']][$rule['rule_type']==='required_file'?'required_files':'optional_files'][]=$rule['rule_value'];
-        foreach($games as &$game){$game['supported_stores']=json_decode($game['supported_stores']??'[]',true)?:['manual'];$game['required_files']=$rulesByGame[(int)$game['id']]['required_files']??[];$game['optional_files']=$rulesByGame[(int)$game['id']]['optional_files']??[];}unset($game);
+        foreach($games as &$game){$game['supported_stores']=json_decode($game['supported_stores']??'[]',true)?:['manual'];$game['required_files']=$rulesByGame[(int)$game['id']]['required_files']??[];$game['optional_files']=$rulesByGame[(int)$game['id']]['optional_files']??[];$game['category_ids']=array_values(array_filter(array_map('intval',explode(',',(string)($game['category_ids_csv']??'')))));unset($game['category_ids_csv']);}unset($game);
         return [
             'stats'=>$this->dashboard(),
             'games'=>$games,
@@ -65,6 +65,7 @@ final class AdminService
                 $pdo->prepare('UPDATE games SET name=?,slug=?,short_description=?,description=?,cover_url=?,banner_url=?,local_cover_path=?,local_banner_path=?,cover_path=?,banner_path=?,steam_app_id=?,epic_catalog_id=?,executable=?,process_name=?,access_type=?,translation_percent=?,minimum_loader_version=?,supported_stores=?,is_active=? WHERE id=?')->execute([...$values,$id]);
             } else {$pdo->prepare('INSERT INTO games(name,slug,short_description,description,cover_url,banner_url,local_cover_path,local_banner_path,cover_path,banner_path,steam_app_id,epic_catalog_id,executable,process_name,access_type,translation_percent,minimum_loader_version,supported_stores,is_active,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute([...$values,$actor]);$id=(int)$pdo->lastInsertId();}
             if(isset($in['required_files'])){$pdo->prepare("DELETE FROM game_detection_rules WHERE game_id=? AND rule_type IN ('required_file','optional_file')")->execute([$id]); foreach(['required_file'=>'required_files','optional_file'=>'optional_files'] as $type=>$field) foreach(array_filter(array_map('trim',(array)($in[$field]??[]))) as $i=>$path){if(!PathGuard::isSafeRelative($path))throw new \DomainException('Güvenli olmayan tespit yolu: '.$path);$pdo->prepare('INSERT INTO game_detection_rules(game_id,provider,rule_type,rule_value,sort_order,is_required) VALUES(?,?,?,?,?,?)')->execute([$id,'manual',$type,$path,($i+1)*10,$type==='required_file']);}}
+            if(array_key_exists('category_ids',$in)){$pdo->prepare('DELETE FROM game_categories WHERE game_id=?')->execute([$id]);$categoryIds=array_values(array_unique(array_filter(array_map('intval',(array)$in['category_ids']))));if($categoryIds){$check=$pdo->prepare('SELECT id FROM categories WHERE id=?');$insert=$pdo->prepare('INSERT INTO game_categories(game_id,category_id) VALUES(?,?)');foreach($categoryIds as $categoryId){$check->execute([$categoryId]);if(!$check->fetchColumn())throw new DomainException('Kategori bulunamadı.');$insert->execute([$id,$categoryId]);}}}
             $pdo->commit(); (new AuditService())->write($actor,$before?'game.updated':'game.created','game',$id,$before,$in); return $id;
         } catch(\Throwable $e){$pdo->rollBack();throw $e;}
     }
@@ -159,6 +160,15 @@ final class AdminService
         (new AuditService())->write($actor,$active?'game.activated':'game.deactivated','game',$id,$before,['is_active'=>$active]);
     }
 
+    public function deleteGame(int $id,int $actor): void
+    {
+        $pdo=Database::connection();$s=$pdo->prepare('SELECT * FROM games WHERE id=?');$s->execute([$id]);$game=$s->fetch();if(!$game)throw new DomainException('Oyun bulunamadı.');
+        $s=$pdo->prepare('SELECT pa.storage_name FROM patch_archives pa JOIN patch_versions pv ON pv.id=pa.patch_version_id JOIN patches p ON p.id=pv.patch_id WHERE p.game_id=?');$s->execute([$id]);$archives=$s->fetchAll(PDO::FETCH_COLUMN);
+        $pdo->beginTransaction();try{$pdo->prepare('DELETE prc FROM patch_release_channels prc JOIN patches p ON p.id=prc.patch_id WHERE p.game_id=?')->execute([$id]);$pdo->prepare('DELETE FROM games WHERE id=?')->execute([$id]);(new AuditService())->write($actor,'game.deleted','game',$id,$game,null);$pdo->commit();}catch(Throwable $error){$pdo->rollBack();throw $error;}
+        $images=new ImageStorage();foreach(['local_cover_path','local_banner_path','local_icon_path'] as $column)$images->deleteManaged($game[$column]??null);
+        $storage=new PatchStorage();foreach($archives as $name){$path=$storage->path((string)$name);if(is_file($path))unlink($path);}
+    }
+
     public function saveGameImage(int $gameId,string $kind,array $file,int $actor): string
     {
         if(!in_array($kind,['cover','banner','icon'],true))throw new DomainException('Görsel türü geçersiz.');
@@ -200,6 +210,12 @@ final class AdminService
         if($id){$s=$pdo->prepare('SELECT * FROM categories WHERE id=?');$s->execute([$id]);$before=$s->fetch();if(!$before)throw new DomainException('Kategori bulunamadı.');$pdo->prepare('UPDATE categories SET name=?,slug=?,sort_order=?,is_active=? WHERE id=?')->execute([$name,$slug,(int)($input['sort_order']??0),!empty($input['is_active'])?1:0,$id]);}
         else{$pdo->prepare('INSERT INTO categories(name,slug,sort_order,is_active) VALUES(?,?,?,?)')->execute([$name,$slug,(int)($input['sort_order']??0),!empty($input['is_active'])?1:0]);$id=(int)$pdo->lastInsertId();}
         (new AuditService())->write($actor,$before?'category.updated':'category.created','category',$id,$before,$input);return $id;
+    }
+
+    public function deleteCategory(int $id,int $actor): void
+    {
+        $pdo=Database::connection();$s=$pdo->prepare('SELECT * FROM categories WHERE id=?');$s->execute([$id]);$before=$s->fetch();if(!$before)throw new DomainException('Kategori bulunamadı.');
+        $pdo->prepare('DELETE FROM categories WHERE id=?')->execute([$id]);(new AuditService())->write($actor,'category.deleted','category',$id,$before,null);
     }
 
     public function saveAnnouncement(array $input,int $actor): int

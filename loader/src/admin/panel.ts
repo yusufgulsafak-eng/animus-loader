@@ -1,0 +1,129 @@
+import {api} from "../api/client";
+import type {AdminAnnouncement,AdminBanner,AdminCategory,AdminGame,AdminPanelData,AdminVersion,PatchAction,PatchBuilderData} from "./types";
+
+type Notice=(message:string,bad?:boolean)=>void;
+const escapeHtml=(value:unknown)=>String(value??"").replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]!));
+const selected=(value:unknown,current:unknown)=>String(value)===String(current)?" selected":"";
+const checked=(value:unknown)=>Boolean(Number(value))?" checked":"";
+const dt=(value?:string|null)=>value?String(value).replace(" ","T").slice(0,16):"";
+const actionTypes=["COPY_FILE","COPY_DIRECTORY","REPLACE_FILE","DELETE_FILE","DELETE_DIRECTORY","CREATE_DIRECTORY","MOVE_FILE","RENAME_FILE"];
+
+export async function renderAdminPanel(host:HTMLElement,onChanged:()=>Promise<void>,notify:Notice):Promise<void>{
+  host.innerHTML='<section class="loader-admin admin-loading"><div class="spinner"></div><h2>Yönetim verileri yükleniyor…</h2></section>';
+  try{
+    let data=await api.adminPanel();
+    const reload=async(refresh=false)=>{data=await api.adminPanel();draw();if(refresh)await onChanged()};
+    const run=async(task:()=>Promise<unknown>,message:string,refresh=false)=>{try{await task();notify(message);await reload(refresh)}catch(error){notify(error instanceof Error?error.message:"İşlem tamamlanamadı.",true)}};
+    const draw=()=>{
+      host.innerHTML=layout(data);
+      bindTabs(host);
+      bindGames(host,data,run);
+      bindPatches(host,data,run,notify);
+      bindCategories(host,data,run);
+      bindAnnouncements(host,data,run);
+      bindBanners(host,run);
+    };
+    draw();
+  }catch(error){
+    host.innerHTML=`<section class="loader-admin admin-denied"><h2>Yönetim paneli açılamadı</h2><p>${escapeHtml(error instanceof Error?error.message:"Bu işlem için yetkiniz bulunmuyor.")}</p><button id="admin-retry">Tekrar Dene</button></section>`;
+    host.querySelector("#admin-retry")?.addEventListener("click",()=>void renderAdminPanel(host,onChanged,notify));
+  }
+}
+
+function layout(data:AdminPanelData):string{
+  const s=data.stats;
+  return `<section class="loader-admin">
+    <div class="admin-heading"><div><span class="overline">YALNIZCA YETKİLİ HESAPLAR</span><h1>Yönetim Paneli</h1><p>Animus kataloğu ve yayın akışını loader içinden yönet.</p></div><div class="admin-statline"><b>${s.games}</b> oyun · <b>${s.patches}</b> sürüm · <b>${s.downloads}</b> indirme</div></div>
+    <div class="admin-tabs">
+      <button class="active" data-admin-tab="games">Oyunlar</button><button data-admin-tab="patches">Yamalar</button><button data-admin-tab="categories">Kategoriler</button><button data-admin-tab="announcements">Duyurular</button><button data-admin-tab="banners">Bannerlar</button>
+    </div>
+    <div class="admin-panel active" data-admin-panel="games">${gamesView(data)}</div>
+    <div class="admin-panel" data-admin-panel="patches">${patchesView(data)}</div>
+    <div class="admin-panel" data-admin-panel="categories">${categoriesView(data.categories)}</div>
+    <div class="admin-panel" data-admin-panel="announcements">${announcementsView(data.announcements)}</div>
+    <div class="admin-panel" data-admin-panel="banners">${bannersView(data.banners)}</div>
+  </section>`;
+}
+
+function gamesView(data:AdminPanelData):string{
+  const categories=data.categories.map(category=>`<label><input type="checkbox" name="category_ids" value="${category.id}"> ${escapeHtml(category.name)}</label>`).join("");
+  const rows=data.games.map(game=>`<tr><td><b>${escapeHtml(game.name)}</b><small>${escapeHtml(game.slug)}</small></td><td>${game.access_type==="premium"?"Premium":"Ücretsiz"}</td><td>%${game.translation_percent}</td><td>${Number(game.is_active)?"Aktif":"Pasif"}</td><td class="admin-actions"><button data-game-edit="${game.id}">Düzenle</button><button data-game-toggle="${game.id}" data-active="${Number(game.is_active)?0:1}">${Number(game.is_active)?"Pasife Al":"Aktifleştir"}</button><button class="danger" data-game-delete="${game.id}">Sil</button></td></tr>`).join("");
+  return `<div class="admin-grid two">
+    <form id="admin-game-form" class="admin-card"><div class="admin-card-title"><h2>Oyun Ekle / Düzenle</h2><button type="button" id="admin-new-game">Temizle</button></div>
+      <input type="hidden" name="id" value="0"><label>Oyun adı<input name="name" required maxlength="190"></label><label>Slug<input name="slug" required pattern="[a-z0-9]+(?:-[a-z0-9]+)*"></label>
+      <label>Kısa açıklama<textarea name="short_description" maxlength="500"></textarea></label><label>Açıklama<textarea name="description" rows="4"></textarea></label>
+      <div class="admin-form-grid"><label>Steam App ID<input name="steam_app_id"></label><label>Epic ID<input name="epic_catalog_id"></label><label>Executable<input name="executable"></label><label>Process name<input name="process_name"></label>
+      <label>Erişim<select name="access_type"><option value="free">Ücretsiz</option><option value="premium">Premium</option></select></label><label>Çeviri %<input name="translation_percent" type="number" min="0" max="100" value="0"></label><label>Minimum loader<input name="minimum_loader_version" value="0.1.0"></label><label>Mağazalar<input name="supported_stores" value="manual" placeholder="steam, epic, manual"></label></div>
+      <fieldset><legend>Kategoriler</legend><div class="admin-checks">${categories||"<small>Önce kategori oluşturun.</small>"}</div></fieldset>
+      <label>Zorunlu dosyalar<textarea name="required_files" rows="3" placeholder="Her satıra bir relative path"></textarea></label><label>Opsiyonel dosyalar<textarea name="optional_files" rows="2"></textarea></label>
+      <label class="admin-check"><input name="is_active" type="checkbox"> Aktif</label><button type="submit" class="admin-primary">Oyunu Kaydet</button>
+    </form>
+    <div class="admin-stack"><form id="admin-cover-form" class="admin-card"><h2>Kapak Görseli</h2><label>Oyun<select name="game_id" required><option value="">Seçin</option>${gameOptions(data.games)}</select></label><label>JPG / PNG / WebP<input name="image" type="file" accept="image/jpeg,image/png,image/webp" required></label><button class="admin-primary">Yükle / Değiştir</button><button type="button" class="danger" id="admin-cover-delete">Kapağı Kaldır</button></form>
+      <div class="admin-card admin-note"><b>Güvenli silme</b><p>Sil işlemi oyunla ilişkili patch metadata ve private arşivleri de kaldırır. Yanlışlıkla silmeyi önlemek için ayrıca onay istenir.</p></div></div>
+    </div>
+    <div class="admin-table-wrap"><table><thead><tr><th>Oyun</th><th>Erişim</th><th>Çeviri</th><th>Durum</th><th>İşlem</th></tr></thead><tbody>${rows||'<tr><td colspan="5">Oyun yok.</td></tr>'}</tbody></table></div>`;
+}
+
+function patchesView(data:AdminPanelData):string{
+  const rows=data.versions.map(version=>`<tr><td><b>${escapeHtml(version.game_name)}</b><small>${escapeHtml(version.original_name||"Arşiv yok")}</small></td><td>${escapeHtml(version.version)}</td><td>${escapeHtml(version.channel)}</td><td>${escapeHtml(version.status)}</td><td class="admin-actions"><button data-builder="${version.id}">Builder</button><button data-publish="${version.id}">Yayınla</button>${version.status==="ARCHIVED"?`<button data-rollback="${version.id}">Rollback</button>`:""}<select data-patch-status="${version.id}"><option value="">Durum…</option><option>TESTING</option><option>DISABLED</option><option>ARCHIVED</option><option>DRAFT</option></select></td></tr>`).join("");
+  return `<div class="admin-grid two"><form id="admin-patch-form" class="admin-card" enctype="multipart/form-data"><h2>Yeni Patch Sürümü</h2><label>Oyun<select name="game_id" required><option value="">Seçin</option>${gameOptions(data.games)}</select></label><div class="admin-form-grid"><label>Patch version<input name="version" required placeholder="1.0.0"></label><label>Oyun version<input name="game_version"></label><label>Kanal<select name="channel"><option>stable</option><option>beta</option><option selected>internal</option></select></label><label>Erişim<select name="access_type"><option value="free">Ücretsiz</option><option value="premium">Premium</option></select></label><label>Minimum loader<input name="minimum_loader_version" value="0.1.0"></label><label class="admin-check"><input type="checkbox" name="mandatory_update" value="1"> Zorunlu güncelleme</label></div><label>Changelog<textarea name="changelog" rows="4"></textarea></label><label>Patch ZIP<input name="archive" type="file" accept=".zip,application/zip" required></label><button class="admin-primary">ZIP Yükle ve Draft Oluştur</button></form>
+    <section class="admin-card" id="patch-builder"><div class="admin-card-title"><h2>Patch Builder</h2><button id="builder-add-action" type="button">Action Ekle</button></div><label>Version ID<input id="builder-version-id" type="number" min="1"></label><button type="button" id="builder-load">Arşiv ve Actionları Yükle</button><div id="builder-tree" class="admin-file-tree"></div><div id="builder-actions"></div><div class="admin-actions wide"><button id="builder-save" type="button">Actionları Kaydet</button><button id="builder-test" type="button">Manifest Test</button></div><pre id="builder-output"></pre></section></div>
+    <div class="admin-table-wrap"><table><thead><tr><th>Oyun</th><th>Sürüm</th><th>Kanal</th><th>Durum</th><th>İşlem</th></tr></thead><tbody>${rows||'<tr><td colspan="5">Patch sürümü yok.</td></tr>'}</tbody></table></div>`;
+}
+
+function categoriesView(categories:AdminCategory[]):string{
+  return `<div class="admin-grid two"><form id="admin-category-form" class="admin-card"><h2>Kategori</h2><input type="hidden" name="id" value="0"><label>Ad<input name="name" required></label><label>Slug<input name="slug" required></label><label>Sıra<input name="sort_order" type="number" value="0"></label><label class="admin-check"><input name="is_active" type="checkbox" checked> Aktif</label><button class="admin-primary">Kaydet</button></form><div class="admin-card admin-list">${categories.map(item=>`<article><div><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.slug)}</small></div><button data-category-edit="${item.id}">Düzenle</button><button class="danger" data-category-delete="${item.id}">Sil</button></article>`).join("")||"<p>Kategori yok.</p>"}</div></div>`;
+}
+
+function announcementsView(items:AdminAnnouncement[]):string{
+  return `<div class="admin-grid two"><form id="admin-announcement-form" class="admin-card"><h2>Duyuru</h2><input type="hidden" name="id" value="0"><label>Başlık<input name="title" required></label><label>Metin<textarea name="body" rows="5" required></textarea></label><label>Hedef<select name="audience"><option>all</option><option>free</option><option>premium</option><option>tester</option><option>admin</option></select></label><div class="admin-form-grid"><label>Başlangıç<input name="starts_at" type="datetime-local"></label><label>Bitiş<input name="ends_at" type="datetime-local"></label></div><label class="admin-check"><input name="is_active" type="checkbox" checked> Aktif</label><button class="admin-primary">Kaydet</button></form><div class="admin-card admin-list">${items.map(item=>`<article><div><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.audience)} · ${Number(item.is_active)?"Aktif":"Pasif"}</small><p>${escapeHtml(item.body)}</p></div><button data-announcement-edit="${item.id}">Düzenle</button><button class="danger" data-announcement-delete="${item.id}">Sil</button></article>`).join("")||"<p>Duyuru yok.</p>"}</div></div>`;
+}
+
+function bannersView(items:AdminBanner[]):string{
+  return `<div class="admin-grid two"><form id="admin-banner-form" class="admin-card" enctype="multipart/form-data"><h2>Yeni Banner</h2><label>Başlık<input name="title" required></label><label>Hedef URL<input name="target_url"></label><label>Sıra<input name="sort_order" type="number" value="0"></label><label>JPG / PNG / WebP<input name="image" type="file" accept="image/jpeg,image/png,image/webp" required></label><label class="admin-check"><input name="is_active" type="checkbox" value="1" checked> Aktif</label><button class="admin-primary">Banner Yükle</button></form><div class="admin-card admin-list">${items.map(item=>`<article><div><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.image_path)}</small></div><button class="danger" data-banner-delete="${item.id}">Sil</button></article>`).join("")||"<p>Banner yok.</p>"}</div></div>`;
+}
+
+function gameOptions(games:AdminGame[]):string{return games.map(game=>`<option value="${game.id}">${escapeHtml(game.name)}</option>`).join("")}
+function bindTabs(host:HTMLElement){host.querySelectorAll<HTMLButtonElement>("[data-admin-tab]").forEach(button=>button.onclick=()=>{host.querySelectorAll("[data-admin-tab]").forEach(x=>x.classList.remove("active"));host.querySelectorAll("[data-admin-panel]").forEach(x=>x.classList.remove("active"));button.classList.add("active");host.querySelector(`[data-admin-panel="${button.dataset.adminTab}"]`)?.classList.add("active")})}
+function lines(value:FormDataEntryValue|null){return String(value||"").split(/\r?\n/).map(x=>x.trim()).filter(Boolean)}
+
+function bindGames(host:HTMLElement,data:AdminPanelData,run:(task:()=>Promise<unknown>,message:string,refresh?:boolean)=>Promise<void>){
+  const form=host.querySelector<HTMLFormElement>("#admin-game-form")!;
+  host.querySelector("#admin-new-game")!.addEventListener("click",()=>{form.reset();(form.elements.namedItem("id") as HTMLInputElement).value="0"});
+  host.querySelectorAll<HTMLButtonElement>("[data-game-edit]").forEach(button=>button.onclick=()=>{const game=data.games.find(x=>x.id===Number(button.dataset.gameEdit));if(!game)return;for(const [key,value] of Object.entries(game)){const field=form.elements.namedItem(key);if(!field||key==="category_ids")continue;if(field instanceof HTMLInputElement&&field.type==="checkbox")field.checked=Boolean(Number(value));else if(field instanceof HTMLInputElement||field instanceof HTMLTextAreaElement||field instanceof HTMLSelectElement)field.value=Array.isArray(value)?value.join(", "):String(value??"")}form.querySelectorAll<HTMLInputElement>('input[name="category_ids"]').forEach(x=>x.checked=game.category_ids.includes(Number(x.value)));form.scrollIntoView({behavior:"smooth"})});
+  form.onsubmit=event=>{event.preventDefault();const values=new FormData(form);const game={id:Number(values.get("id")||0),name:String(values.get("name")||""),slug:String(values.get("slug")||""),short_description:String(values.get("short_description")||""),description:String(values.get("description")||""),steam_app_id:String(values.get("steam_app_id")||""),epic_catalog_id:String(values.get("epic_catalog_id")||""),executable:String(values.get("executable")||""),process_name:String(values.get("process_name")||""),access_type:String(values.get("access_type")||"free"),translation_percent:Number(values.get("translation_percent")||0),minimum_loader_version:String(values.get("minimum_loader_version")||"0.1.0"),supported_stores:String(values.get("supported_stores")||"manual").split(",").map(x=>x.trim()).filter(Boolean),required_files:lines(values.get("required_files")),optional_files:lines(values.get("optional_files")),category_ids:values.getAll("category_ids").map(Number),is_active:values.has("is_active")};void run(()=>api.adminAction("save_game",{game}),"Oyun kaydedildi.",true)};
+  host.querySelectorAll<HTMLButtonElement>("[data-game-toggle]").forEach(button=>button.onclick=()=>void run(()=>api.adminAction("set_game_status",{game_id:Number(button.dataset.gameToggle),active:button.dataset.active==="1"}),"Oyun durumu güncellendi.",true));
+  host.querySelectorAll<HTMLButtonElement>("[data-game-delete]").forEach(button=>button.onclick=()=>{const game=data.games.find(x=>x.id===Number(button.dataset.gameDelete));if(game&&confirm(`"${game.name}" kalıcı olarak silinsin mi? İlişkili patch sürümleri de kaldırılır.`))void run(()=>api.adminAction("delete_game",{game_id:game.id}),"Oyun silindi.",true)});
+  const coverForm=host.querySelector<HTMLFormElement>("#admin-cover-form")!;coverForm.onsubmit=event=>{event.preventDefault();const upload=new FormData(coverForm);upload.set("kind","cover");void run(()=>api.adminUpload("upload_game_image",upload),"Kapak görseli güncellendi.",true)};
+  host.querySelector("#admin-cover-delete")!.addEventListener("click",()=>{const id=Number(new FormData(coverForm).get("game_id"));if(id&&confirm("Bu oyunun özel kapak görseli kaldırılsın mı?"))void run(()=>api.adminAction("delete_game_image",{game_id:id,kind:"cover"}),"Kapak kaldırıldı.",true)});
+}
+
+function bindPatches(host:HTMLElement,data:AdminPanelData,run:(task:()=>Promise<unknown>,message:string,refresh?:boolean)=>Promise<void>,notify:Notice){
+  const form=host.querySelector<HTMLFormElement>("#admin-patch-form")!;form.onsubmit=event=>{event.preventDefault();void run(()=>api.adminUpload("create_patch",new FormData(form)),"Patch ZIP yüklendi ve draft sürüm oluşturuldu.",true)};
+  host.querySelectorAll<HTMLButtonElement>("[data-publish]").forEach(button=>button.onclick=()=>{if(confirm("Manifest kontrolleri başarılıysa bu sürüm yayınlansın mı?"))void run(()=>api.adminAction("publish_patch",{version_id:Number(button.dataset.publish)}),"Patch yayınlandı.",true)});
+  host.querySelectorAll<HTMLButtonElement>("[data-rollback]").forEach(button=>button.onclick=()=>{if(confirm("Bu arşivlenmiş sürüm yeniden aktif yayın olsun mu?"))void run(()=>api.adminAction("rollback_patch",{version_id:Number(button.dataset.rollback)}),"Rollback tamamlandı.",true)});
+  host.querySelectorAll<HTMLSelectElement>("[data-patch-status]").forEach(select=>select.onchange=()=>{if(select.value)void run(()=>api.adminAction("set_patch_status",{version_id:Number(select.dataset.patchStatus),status:select.value}),"Patch durumu güncellendi.",true)});
+  let builder:PatchBuilderData|null=null;const idInput=host.querySelector<HTMLInputElement>("#builder-version-id")!,list=host.querySelector<HTMLElement>("#builder-actions")!,tree=host.querySelector<HTMLElement>("#builder-tree")!,output=host.querySelector<HTMLElement>("#builder-output")!;
+  const add=(action:Partial<PatchAction>={})=>{const row=document.createElement("div");row.className="builder-action";row.dataset.id=action.id||crypto.randomUUID();row.innerHTML=`<select class="builder-type">${actionTypes.map(type=>`<option${selected(type,action.type||"COPY_FILE")}>${type}</option>`).join("")}</select><input class="builder-source" placeholder="ZIP kaynak yolu" value="${escapeHtml(action.source||"")}"><input class="builder-destination" placeholder="Game root relative hedef" value="${escapeHtml(action.destination||"")}"><label><input class="builder-backup" type="checkbox"${action.backup===false?"":" checked"}> Backup</label><button type="button" class="danger">Sil</button>`;row.querySelector("button")!.onclick=()=>row.remove();list.append(row)};
+  const load=async(id:number)=>{try{builder=await api.adminAction<PatchBuilderData>("load_patch_builder",{version_id:id});idInput.value=String(id);tree.innerHTML=builder.file_tree.length?`<b>ZIP içeriği</b>${builder.file_tree.map(x=>`<code>${escapeHtml(x.path)}</code>`).join("")}`:"<small>Arşiv içeriği boş.</small>";list.innerHTML="";builder.actions.forEach(add);notify("Patch Builder yüklendi.")}catch(error){notify(error instanceof Error?error.message:"Builder yüklenemedi.",true)}};
+  host.querySelectorAll<HTMLButtonElement>("[data-builder]").forEach(button=>button.onclick=()=>void load(Number(button.dataset.builder)));host.querySelector("#builder-load")!.addEventListener("click",()=>void load(Number(idInput.value)));host.querySelector("#builder-add-action")!.addEventListener("click",()=>add());
+  const actions=()=>[...list.querySelectorAll<HTMLElement>(".builder-action")].map(row=>({id:row.dataset.id!,type:(row.querySelector(".builder-type") as HTMLSelectElement).value,source:(row.querySelector(".builder-source") as HTMLInputElement).value||null,destination:(row.querySelector(".builder-destination") as HTMLInputElement).value,backup:(row.querySelector(".builder-backup") as HTMLInputElement).checked}));
+  host.querySelector("#builder-save")!.addEventListener("click",()=>void run(()=>api.adminAction("save_actions",{version_id:Number(idInput.value),actions:actions()}),"Patch actionları kaydedildi."));
+  host.querySelector("#builder-test")!.addEventListener("click",async()=>{try{const result=await api.adminAction("test_manifest",{version_id:Number(idInput.value)});output.textContent=JSON.stringify(result,null,2);notify("Manifest testi tamamlandı.")}catch(error){notify(error instanceof Error?error.message:"Manifest testi başarısız.",true)}});
+}
+
+function bindCategories(host:HTMLElement,data:AdminPanelData,run:(task:()=>Promise<unknown>,message:string,refresh?:boolean)=>Promise<void>){
+  const form=host.querySelector<HTMLFormElement>("#admin-category-form")!;form.onsubmit=event=>{event.preventDefault();const values=new FormData(form);const category={id:Number(values.get("id")||0),name:String(values.get("name")||""),slug:String(values.get("slug")||""),sort_order:Number(values.get("sort_order")||0),is_active:values.has("is_active")};void run(()=>api.adminAction("save_category",{category}),"Kategori kaydedildi.",true)};
+  host.querySelectorAll<HTMLButtonElement>("[data-category-edit]").forEach(button=>button.onclick=()=>fillForm(form,data.categories.find(x=>x.id===Number(button.dataset.categoryEdit))));
+  host.querySelectorAll<HTMLButtonElement>("[data-category-delete]").forEach(button=>button.onclick=()=>{if(confirm("Kategori silinsin mi? Oyunlar silinmez."))void run(()=>api.adminAction("delete_category",{id:Number(button.dataset.categoryDelete)}),"Kategori silindi.",true)});
+}
+function bindAnnouncements(host:HTMLElement,data:AdminPanelData,run:(task:()=>Promise<unknown>,message:string,refresh?:boolean)=>Promise<void>){
+  const form=host.querySelector<HTMLFormElement>("#admin-announcement-form")!;form.onsubmit=event=>{event.preventDefault();const values=new FormData(form);const announcement={id:Number(values.get("id")||0),title:String(values.get("title")||""),body:String(values.get("body")||""),audience:String(values.get("audience")||"all"),starts_at:String(values.get("starts_at")||""),ends_at:String(values.get("ends_at")||""),is_active:values.has("is_active")};void run(()=>api.adminAction("save_announcement",{announcement}),"Duyuru kaydedildi.",true)};
+  host.querySelectorAll<HTMLButtonElement>("[data-announcement-edit]").forEach(button=>button.onclick=()=>fillForm(form,data.announcements.find(x=>x.id===Number(button.dataset.announcementEdit))));
+  host.querySelectorAll<HTMLButtonElement>("[data-announcement-delete]").forEach(button=>button.onclick=()=>{if(confirm("Duyuru silinsin mi?"))void run(()=>api.adminAction("delete_announcement",{id:Number(button.dataset.announcementDelete)}),"Duyuru silindi.",true)});
+}
+function bindBanners(host:HTMLElement,run:(task:()=>Promise<unknown>,message:string,refresh?:boolean)=>Promise<void>){
+  const form=host.querySelector<HTMLFormElement>("#admin-banner-form")!;form.onsubmit=event=>{event.preventDefault();void run(()=>api.adminUpload("save_banner",new FormData(form)),"Banner yüklendi.",true)};
+  host.querySelectorAll<HTMLButtonElement>("[data-banner-delete]").forEach(button=>button.onclick=()=>{if(confirm("Banner silinsin mi?"))void run(()=>api.adminAction("delete_banner",{id:Number(button.dataset.bannerDelete)}),"Banner silindi.",true)});
+}
+function fillForm(form:HTMLFormElement,item:AdminCategory|AdminAnnouncement|undefined){if(!item)return;for(const [key,value] of Object.entries(item)){const field=form.elements.namedItem(key);if(field instanceof HTMLInputElement&&field.type==="checkbox")field.checked=Boolean(Number(value));else if(field instanceof HTMLInputElement||field instanceof HTMLTextAreaElement||field instanceof HTMLSelectElement)field.value=field.type==="datetime-local"?dt(String(value||"")):String(value??"")}form.scrollIntoView({behavior:"smooth"})}
