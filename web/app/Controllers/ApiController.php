@@ -13,6 +13,7 @@ use App\Services\CatalogService;
 use App\Services\ManifestService;
 use App\Services\ManifestValidator;
 use App\Services\PatchStorage;
+use App\Support\AdminActions;
 
 final class ApiController
 {
@@ -61,30 +62,10 @@ final class ApiController
     private function adminPanel():never{$this->auth->requireAdmin();Http::json(['ok'=>true,'data'=>(new AdminService())->panelData()]);}
     private function adminAction():never
     {
-        RateLimiter::enforce('admin-action',180,60);$user=$this->auth->requireAdmin();$body=Http::body();$action=(string)($body['action']??'');$admin=new AdminService();$uid=(int)$user['id'];
-        $result=match($action){
-            'save_game'=>['id'=>$admin->saveGame($body['game']??[],$uid)],
-            'duplicate_game'=>['id'=>$admin->duplicateGame((int)($body['game_id']??0),$uid)],
-            'set_game_status'=>(function()use($admin,$body,$uid){$admin->setGameStatus((int)($body['game_id']??0),(bool)($body['active']??false),$uid);return null;})(),
-            'delete_game'=>(function()use($admin,$body,$uid){$admin->deleteGame((int)($body['game_id']??0),$uid);return null;})(),
-            'upload_game_image'=>['path'=>$admin->saveGameImage((int)($_POST['game_id']??0),(string)($_POST['kind']??''),$_FILES['image']??[],$uid)],
-            'delete_game_image'=>(function()use($admin,$body,$uid){$admin->deleteGameImage((int)($body['game_id']??0),(string)($body['kind']??''),$uid);return null;})(),
-            'inspect_external_patch'=>$admin->inspectExternalPatch((string)($body['url']??'')),
-            'create_patch'=>['id'=>$admin->createPatchVersion($_POST,$_FILES['archive']??[],$uid)],
-            'load_patch_builder'=>$admin->builderData((int)($body['version_id']??0)),
-            'save_actions'=>(function()use($admin,$body,$uid){$admin->saveActions((int)($body['version_id']??0),$body['actions']??[],$uid);return null;})(),
-            'test_manifest'=>(function()use($body){$manifest=(new ManifestService())->build((int)($body['version_id']??0));return ['manifest'=>$manifest,'errors'=>(new ManifestValidator())->validate($manifest)];})(),
-            'publish_patch'=>(function()use($admin,$body,$uid){$admin->publish((int)($body['version_id']??0),$uid);return null;})(),
-            'rollback_patch'=>(function()use($admin,$body,$uid){$admin->rollbackPatch((int)($body['version_id']??0),$uid);return null;})(),
-            'set_patch_status'=>(function()use($admin,$body,$uid){$admin->setPatchStatus((int)($body['version_id']??0),(string)($body['status']??''),$uid);return null;})(),
-            'save_category'=>['id'=>$admin->saveCategory($body['category']??[],$uid)],
-            'delete_category'=>(function()use($admin,$body,$uid){$admin->deleteCategory((int)($body['id']??0),$uid);return null;})(),
-            'save_announcement'=>['id'=>$admin->saveAnnouncement($body['announcement']??[],$uid)],
-            'delete_announcement'=>(function()use($admin,$body,$uid){$admin->deleteAnnouncement((int)($body['id']??0),$uid);return null;})(),
-            'save_banner'=>['id'=>$admin->saveBanner($_POST,$_FILES['image']??[],$uid)],
-            'delete_banner'=>(function()use($admin,$body,$uid){$admin->deleteBanner((int)($body['id']??0),$uid);return null;})(),
-            default=>throw new \DomainException('Bilinmeyen admin işlemi.'),
-        };
+        RateLimiter::enforce('admin-action',180,60);
+        $user=$this->auth->requireAdmin();
+        $body=Http::body();
+        $result=AdminActions::dispatch((string)($body['action']??''),$body,$_FILES,$user);
         Http::json(['ok'=>true,'data'=>$result]);
     }
     private function games():never{$u=$this->auth->requireUser();$games=(new CatalogService())->games($u,['q'=>trim((string)($_GET['q']??'')),'access'=>$_GET['access']??null]);Http::json(['ok'=>true,'data'=>$games,'meta'=>['count'=>count($games)]]);}
@@ -94,12 +75,12 @@ final class ApiController
 
     private function downloadToken(int$id):never
     {
-        RateLimiter::enforce('download-token',30,60);$u=$this->auth->requireUser();$this->assertManifestAccess($id,$u);$pdo=Database::connection();$s=$pdo->prepare('SELECT id,source_type,external_url FROM patch_archives WHERE patch_version_id=?');$s->execute([$id]);$archive=$s->fetch();if(!$archive)Http::error('Patch arşivi bulunamadı.',404);$ttl=Env::int('DOWNLOAD_TOKEN_TTL',300);if(($archive['source_type']??'server')==='external'){if(empty($archive['external_url']))Http::error('Harici patch URL tanımlı değil.',500);Http::json(['ok'=>true,'data'=>['url'=>$archive['external_url'],'expires_in'=>$ttl,'source_type'=>'external']]);}$plain=bin2hex(random_bytes(32));$pdo->prepare('INSERT INTO download_tokens(user_id,patch_archive_id,token_hash,expires_at) VALUES(?,?,?,DATE_ADD(NOW(),INTERVAL ? SECOND))')->execute([$u['id'],$archive['id'],hash('sha256',$plain),$ttl]);Http::json(['ok'=>true,'data'=>['url'=>rtrim(Env::get('APP_URL',''),'/').'/api/download/'.$plain,'expires_in'=>$ttl,'source_type'=>'server']]);
+        RateLimiter::enforce('download-token',30,60);$u=$this->auth->requireUser();$this->assertManifestAccess($id,$u);$pdo=Database::connection();$s=$pdo->prepare('SELECT id FROM patch_archives WHERE patch_version_id=?');$s->execute([$id]);$archive=(int)$s->fetchColumn();if(!$archive)Http::error('Patch arşivi bulunamadı.',404);$plain=bin2hex(random_bytes(32));$ttl=Env::int('DOWNLOAD_TOKEN_TTL',300);$pdo->prepare('INSERT INTO download_tokens(user_id,patch_archive_id,token_hash,expires_at) VALUES(?,?,?,DATE_ADD(NOW(),INTERVAL ? SECOND))')->execute([$u['id'],$archive,hash('sha256',$plain),$ttl]);Http::json(['ok'=>true,'data'=>['url'=>rtrim(Env::get('APP_URL',''),'/').'/api/download/'.$plain,'expires_in'=>$ttl]]);
     }
 
     private function download(string$token):never
     {
-        $pdo=Database::connection();$pdo->beginTransaction();try{$s=$pdo->prepare('SELECT dt.id,dt.user_id,dt.patch_archive_id,pa.storage_name,pa.original_name,pa.size_bytes,pa.mime_type FROM download_tokens dt JOIN patch_archives pa ON pa.id=dt.patch_archive_id WHERE dt.token_hash=? AND dt.expires_at>NOW() AND dt.used_at IS NULL FOR UPDATE');$s->execute([hash('sha256',$token)]);$row=$s->fetch();if(!$row){$pdo->rollBack();Http::error('İndirme tokenı geçersiz veya süresi dolmuş.',410);}$pdo->prepare('UPDATE download_tokens SET used_at=NOW() WHERE id=?')->execute([$row['id']]);$ip=hash('sha256',($_SERVER['REMOTE_ADDR']??'unknown').'|'.Env::get('APP_KEY','local'));$pdo->prepare("INSERT INTO download_logs(user_id,patch_archive_id,ip_hash,user_agent,status) VALUES(?,?,?,?, 'started')")->execute([$row['user_id'],$row['patch_archive_id'],$ip,substr($_SERVER['HTTP_USER_AGENT']??'',0,500)]);$log=(int)$pdo->lastInsertId();$pdo->commit();$path=(new PatchStorage())->path($row['storage_name']);if(!is_file($path))throw new \RuntimeException('Arşiv storage içinde yok.');header('Content-Type: '.$row['mime_type']);header('Content-Length: '.$row['size_bytes']);header('Content-Disposition: attachment; filename="'.str_replace('"','',$row['original_name']).'"');header('X-Content-Type-Options: nosniff');readfile($path);$pdo->prepare("UPDATE download_logs SET status='completed',bytes_sent=? WHERE id=?")->execute([$row['size_bytes'],$log]);exit;}catch(\Throwable$e){if($pdo->inTransaction())$pdo->rollBack();throw$e;}
+        $pdo=Database::connection();$pdo->beginTransaction();try{$s=$pdo->prepare('SELECT dt.id,dt.user_id,dt.patch_archive_id,pa.storage_name,pa.original_name,pa.size_bytes,pa.mime_type,pa.source_type,pa.external_url FROM download_tokens dt JOIN patch_archives pa ON pa.id=dt.patch_archive_id WHERE dt.token_hash=? AND dt.expires_at>NOW() AND dt.used_at IS NULL FOR UPDATE');$s->execute([hash('sha256',$token)]);$row=$s->fetch();if(!$row){$pdo->rollBack();Http::error('İndirme tokenı geçersiz veya süresi dolmuş.',410);}$pdo->prepare('UPDATE download_tokens SET used_at=NOW() WHERE id=?')->execute([$row['id']]);$ip=hash('sha256',($_SERVER['REMOTE_ADDR']??'unknown').'|'.Env::get('APP_KEY','local'));$pdo->prepare("INSERT INTO download_logs(user_id,patch_archive_id,ip_hash,user_agent,status) VALUES(?,?,?,?, 'started')")->execute([$row['user_id'],$row['patch_archive_id'],$ip,substr($_SERVER['HTTP_USER_AGENT']??'',0,500)]);$log=(int)$pdo->lastInsertId();$pdo->commit();if(($row['source_type']??'server')==='external'&&!empty($row['external_url'])){$pdo->prepare("UPDATE download_logs SET status='completed',bytes_sent=? WHERE id=?")->execute([$row['size_bytes'],$log]);header('Location: '.$row['external_url'],true,302);exit;}$path=(new PatchStorage())->path($row['storage_name']);if(!is_file($path)){$pdo->prepare("UPDATE download_logs SET status='failed' WHERE id=?")->execute([$log]);throw new \RuntimeException('Arşiv storage içinde yok.');}header('Content-Type: '.$row['mime_type']);header('Content-Length: '.$row['size_bytes']);header('Content-Disposition: attachment; filename="'.str_replace('"','',$row['original_name']).'"');header('X-Content-Type-Options: nosniff');readfile($path);$pdo->prepare("UPDATE download_logs SET status='completed',bytes_sent=? WHERE id=?")->execute([$row['size_bytes'],$log]);exit;}catch(\Throwable$e){if($pdo->inTransaction())$pdo->rollBack();throw$e;}
     }
 
     private function loaderConfig():never
