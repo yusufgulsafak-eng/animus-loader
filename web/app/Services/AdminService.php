@@ -90,10 +90,22 @@ final class AdminService
             $externalUrl=trim((string)($in['external_url']??''));
             $sha256=strtolower(trim((string)($in['sha256']??'')));
             $sizeBytes=(int)($in['size_bytes']??0);
-            $originalName=trim((string)($in['original_name']??''))?:'external-patch.zip';
+            $originalName=trim((string)($in['original_name']??''));
+            // PixelDrain paylaşım linklerinde metadata'yı sunucu tarafında otomatik çöz.
+            if($externalUrl!=='' && ($sha256==='' || $sizeBytes<1 || $originalName==='')){
+                $meta=$this->inspectExternalPatch($externalUrl);
+                $externalUrl=(string)$meta['direct_url'];
+                if($sha256==='')$sha256=(string)$meta['sha256'];
+                if($sizeBytes<1)$sizeBytes=(int)$meta['size_bytes'];
+                if($originalName==='')$originalName=(string)$meta['original_name'];
+            }else{
+                $pixelId=$this->pixelDrainId($externalUrl);
+                if($pixelId!==null)$externalUrl='https://pixeldrain.com/api/file/'.$pixelId;
+            }
+            $originalName=$originalName?:'external-patch.zip';
             $this->assertSafeExternalUrl($externalUrl);
-            if(!preg_match('/^[a-f0-9]{64}$/',$sha256))throw new DomainException('Harici patch için geçerli SHA-256 zorunludur.');
-            if($sizeBytes<1)throw new DomainException('Harici patch için dosya boyutu (byte) zorunludur.');
+            if(!preg_match('/^[a-f0-9]{64}$/',$sha256))throw new DomainException('Harici patch için geçerli SHA-256 zorunludur. PixelDrain linkinde bu alan otomatik doldurulur.');
+            if($sizeBytes<1)throw new DomainException('Harici patch için dosya boyutu zorunludur. PixelDrain linkinde bu alan otomatik doldurulur.');
             if(!preg_match('/\.zip$/i',$originalName))$originalName.='.zip';
             $archive=['storage_name'=>'external-'.bin2hex(random_bytes(16)).'.zip','original_name'=>basename(str_replace('\\','/',$originalName)),'mime_type'=>'application/zip','sha256'=>$sha256,'size_bytes'=>$sizeBytes,'file_tree'=>[],'external_url'=>$externalUrl];
         }else{
@@ -105,6 +117,44 @@ final class AdminService
             $pdo->prepare('INSERT INTO patch_versions(patch_id,version,game_version,changelog,minimum_loader_version,status,channel,mandatory_update,access_type,schema_version,created_by) VALUES(?,?,?,?,?,?,?,?,?,1,?)')->execute([$patchId,$in['version'],$in['game_version']??null,$in['changelog']??null,$in['minimum_loader_version']??'0.1.0','DRAFT',in_array($in['channel']??'', ['stable','beta','internal'],true)?$in['channel']:'internal',!empty($in['mandatory_update'])?1:0,in_array($in['access_type']??'', ['free','premium'],true)?$in['access_type']:'free',$actor]);$versionId=(int)$pdo->lastInsertId();
             $pdo->prepare('INSERT INTO patch_archives(patch_version_id,source_type,external_url,storage_name,original_name,mime_type,sha256,size_bytes,file_tree) VALUES(?,?,?,?,?,?,?,?,?)')->execute([$versionId,$sourceType,$archive['external_url'],$archive['storage_name'],$archive['original_name'],$archive['mime_type'],$archive['sha256'],$archive['size_bytes'],json_encode($archive['file_tree'],JSON_UNESCAPED_SLASHES)]);$pdo->commit();(new AuditService())->write($actor,'patch.created','patch_version',$versionId,null,$in);return $versionId;
         }catch(\Throwable $e){$pdo->rollBack();if($sourceType==='server'&&!empty($archive['storage_name']))@unlink((new PatchStorage())->path($archive['storage_name']));throw $e;}
+    }
+
+
+    public function inspectExternalPatch(string $url): array
+    {
+        $url=trim($url);
+        $id=$this->pixelDrainId($url);
+        if($id===null)throw new DomainException('Otomatik link okuma şu anda PixelDrain paylaşım veya direct linklerini destekliyor. Diğer kaynaklarda SHA-256 ve boyutu elle girin.');
+        $infoUrl='https://pixeldrain.com/api/file/'.$id.'/info';
+        $raw='';$status=0;
+        if(function_exists('curl_init')){
+            $ch=curl_init($infoUrl);
+            curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_FOLLOWLOCATION=>false,CURLOPT_CONNECTTIMEOUT=>10,CURLOPT_TIMEOUT=>20,CURLOPT_USERAGENT=>'AnimusLoader/1.0',CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2]);
+            $raw=(string)curl_exec($ch);$status=(int)curl_getinfo($ch,CURLINFO_RESPONSE_CODE);$err=curl_error($ch);curl_close($ch);
+            if($raw===''&&$err!=='')throw new DomainException('PixelDrain bilgisi alınamadı: '.$err);
+        }else{
+            $ctx=stream_context_create(['http'=>['method'=>'GET','timeout'=>20,'ignore_errors'=>true,'header'=>"User-Agent: AnimusLoader/1.0\r\n"],'ssl'=>['verify_peer'=>true,'verify_peer_name'=>true]]);
+            $raw=(string)@file_get_contents($infoUrl,false,$ctx);
+            foreach($http_response_header??[] as $line)if(preg_match('#^HTTP/\S+\s+(\d{3})#',$line,$m)){$status=(int)$m[1];break;}
+        }
+        if($status!==200||$raw==='')throw new DomainException('PixelDrain dosya bilgisi alınamadı (HTTP '.$status.').');
+        $data=json_decode($raw,true);
+        if(!is_array($data)||($data['success']??true)===false)throw new DomainException('PixelDrain geçerli dosya bilgisi döndürmedi.');
+        $hash=strtolower((string)($data['hash_sha256']??$data['sha256']??''));
+        $size=(int)($data['size']??0);$name=trim((string)($data['name']??('patch-'.$id.'.zip')));
+        if(!preg_match('/^[a-f0-9]{64}$/',$hash)||$size<1)throw new DomainException('PixelDrain metadata içinde SHA-256 veya dosya boyutu bulunamadı.');
+        return ['direct_url'=>'https://pixeldrain.com/api/file/'.$id,'sha256'=>$hash,'size_bytes'=>$size,'original_name'=>$name,'provider'=>'pixeldrain'];
+    }
+
+    private function pixelDrainId(string $url): ?string
+    {
+        if($url===''||!filter_var($url,FILTER_VALIDATE_URL))return null;
+        $parts=parse_url($url);if(strtolower((string)($parts['scheme']??''))!=='https')return null;
+        $host=strtolower((string)($parts['host']??''));if(!in_array($host,['pixeldrain.com','www.pixeldrain.com'],true))return null;
+        $path=(string)($parts['path']??'');
+        if(preg_match('#^/u/([A-Za-z0-9_-]+)$#',$path,$m))return $m[1];
+        if(preg_match('#^/api/file/([A-Za-z0-9_-]+)(?:/.*)?$#',$path,$m))return $m[1];
+        return null;
     }
 
     private function assertSafeExternalUrl(string $url): void
