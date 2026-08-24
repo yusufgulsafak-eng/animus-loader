@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "devUrl": "https://api.yusufgulsafak.com"
+  },
+  "app": {
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' https://api.yusufgulsafak.com; img-src 'self' asset: https: data:; media-src 'self' https:; style-src 'self' 'unsafe-inline'"
+    }
+  }
+}

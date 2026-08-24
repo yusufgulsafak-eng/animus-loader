@@ -17,8 +17,12 @@ pub fn download(
     expected_size: u64,
     expected_hash: &str,
 ) -> Result<()> {
+    #[cfg(debug_assertions)]
+    let https_only = !url.starts_with("http://127.0.0.1");
+    #[cfg(not(debug_assertions))]
+    let https_only = true;
     let client = reqwest::blocking::Client::builder()
-        .https_only(!url.starts_with("http://127.0.0.1"))
+        .https_only(https_only)
         .timeout(std::time::Duration::from_secs(1800))
         .build()?;
     let mut response = client.get(url).send()?.error_for_status()?;

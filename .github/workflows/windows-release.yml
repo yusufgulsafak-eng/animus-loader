@@ -2,11 +2,6 @@ name: Windows Tauri Release
 
 on:
   workflow_dispatch:
-    inputs:
-      api_base_url:
-        description: "Production API origin (optional; repository variable/secret fallback is supported)"
-        required: false
-        type: string
 
 permissions:
   contents: read
@@ -16,7 +11,7 @@ jobs:
     name: Build Windows release
     runs-on: windows-latest
     env:
-      VITE_API_BASE_URL: ${{ inputs.api_base_url || vars.VITE_API_BASE_URL || secrets.VITE_API_BASE_URL || 'https://api.example.invalid' }}
+      VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
 
     steps:
       - name: Checkout repository
@@ -31,6 +26,17 @@ jobs:
 
       - name: Set up Rust stable
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate production API variable
+        shell: pwsh
+        run: |
+          $expected = "https://api.yusufgulsafak.com"
+          if ([string]::IsNullOrWhiteSpace($env:VITE_API_BASE_URL)) {
+            throw "Repository Variable VITE_API_BASE_URL is required."
+          }
+          if ($env:VITE_API_BASE_URL.TrimEnd("/") -ne $expected) {
+            throw "VITE_API_BASE_URL must be exactly $expected"
+          }
 
       - name: Verify Windows GUI subsystem
         shell: pwsh
@@ -53,12 +59,38 @@ jobs:
         working-directory: loader
         run: npm run build
 
+      - name: Verify production frontend API
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -LiteralPath "loader/dist" -Recurse -File |
+            Where-Object { $_.Extension -in @(".html", ".js", ".css", ".json", ".map") }
+          $content = ($files | ForEach-Object { [IO.File]::ReadAllText($_.FullName) }) -join "`n"
+          $expected = "https://api.yusufgulsafak.com"
+          if (-not $content.Contains($expected)) {
+            throw "Production API origin was not embedded in the frontend output."
+          }
+          $forbidden = @(
+            "example.invalid",
+            "api.your-domain.example",
+            "patch.example.com",
+            "http://localhost",
+            "https://localhost",
+            "http://127.0.0.1",
+            "https://127.0.0.1",
+            "https://yusufgulsafak.com"
+          )
+          foreach ($value in $forbidden) {
+            if ($content.Contains($value)) {
+              throw "Forbidden API origin remains in frontend output: $value"
+            }
+          }
+
       - name: Run Rust tests
         run: cargo test --manifest-path loader/src-tauri/Cargo.toml
 
       - name: Build Tauri release
         working-directory: loader
-        run: npm run tauri build
+        run: npm run tauri build -- --config src-tauri/tauri.production.conf.json
 
       - name: Upload Windows release artifacts
         uses: actions/upload-artifact@v4
