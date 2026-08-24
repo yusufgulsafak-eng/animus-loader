@@ -1,0 +1,72 @@
+name: Windows Tauri Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: "Production API origin (optional; repository variable/secret fallback is supported)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  windows-release:
+    name: Build Windows release
+    runs-on: windows-latest
+    env:
+      VITE_API_BASE_URL: ${{ inputs.api_base_url || vars.VITE_API_BASE_URL || secrets.VITE_API_BASE_URL || 'https://api.example.invalid' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: loader/package-lock.json
+
+      - name: Set up Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify Windows GUI subsystem
+        shell: pwsh
+        run: |
+          $entryPoint = Get-Content -LiteralPath "loader/src-tauri/src/main.rs" -Raw
+          $required = '#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]'
+          if (-not $entryPoint.Contains($required)) {
+            throw "Windows release GUI subsystem attribute is missing."
+          }
+
+      - name: Install loader dependencies
+        working-directory: loader
+        run: npm ci
+
+      - name: Run loader tests
+        working-directory: loader
+        run: npm test
+
+      - name: Build loader frontend
+        working-directory: loader
+        run: npm run build
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path loader/src-tauri/Cargo.toml
+
+      - name: Build Tauri release
+        working-directory: loader
+        run: npm run tauri build
+
+      - name: Upload Windows release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: animus-windows-release-${{ github.run_number }}
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            loader/src-tauri/target/release/*.exe
+            loader/src-tauri/target/release/bundle/nsis/*.exe
+            loader/src-tauri/target/release/bundle/msi/*.msi
