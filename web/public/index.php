@@ -14,8 +14,13 @@ $path=parse_url($_SERVER['REQUEST_URI']??'/',PHP_URL_PATH)?:'/';
 $method=strtoupper($_SERVER['REQUEST_METHOD']??'GET');
 
 \App\Core\Cors::handle();
+header_remove('X-Powered-By');
 header('Referrer-Policy: strict-origin-when-cross-origin');
 header('X-Frame-Options: DENY');
+header('X-Content-Type-Options: nosniff');
+$forwardedProto=strtolower(trim(explode(',',$_SERVER['HTTP_X_FORWARDED_PROTO']??'')[0]??''));
+$isHttps=(!empty($_SERVER['HTTPS'])&&strtolower((string)$_SERVER['HTTPS'])!=='off')||$forwardedProto==='https';
+if($isHttps)header('Strict-Transport-Security: max-age=31536000; includeSubDomains');
 header("Permissions-Policy: camera=(), microphone=(), geolocation=()");
 
 if($method==='GET'&&preg_match('#^/media/branding/([a-f0-9]{48}\.(?:jpe?g|png|webp|mp4|webm))$#i',$path,$media))(new \App\Services\BrandingMediaStorage())->stream($media[1]);

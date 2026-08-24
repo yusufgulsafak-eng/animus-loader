@@ -1,0 +1,22 @@
+Options -Indexes
+
+<FilesMatch (^\.|\.(?:sql|log|ini|bak)$)>
+  Require all denied
+</FilesMatch>
+
+<IfModule mod_headers.c>
+  Header always set X-Content-Type-Options nosniff
+  Header always set X-Frame-Options DENY
+  Header always set Referrer-Policy strict-origin-when-cross-origin
+  Header always set Permissions-Policy camera=(),microphone=(),geolocation=()
+</IfModule>
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+
+  RewriteRule ^web/(?:app|database|resources|scripts|storage|tests)(?:/|$) - [F,L,NC]
+  RewriteRule ^(?:app|database|resources|scripts|storage|tests)(?:/|$) - [F,L,NC]
+
+  RewriteRule ^web/public(?:/|$) - [L]
+  RewriteRule ^(.*)$ web/public/$1 [L]
+</IfModule>

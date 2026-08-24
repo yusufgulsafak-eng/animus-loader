@@ -11,3 +11,4 @@ web/public/uploads/games/*
 loader/node_modules/
 loader/dist/
 loader/src-tauri/target/
+deploy/
