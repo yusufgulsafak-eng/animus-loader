@@ -75,6 +75,21 @@ final class BrandingMediaStorage
         $handle=fopen($path,'rb');if($handle===false)Http::error('Medya açılamadı.',500);fseek($handle,$start);$remaining=$length;while($remaining>0&&!feof($handle)){$chunk=fread($handle,min(1048576,$remaining));if($chunk===false)break;echo $chunk;$remaining-=strlen($chunk);if(connection_aborted())break;}fclose($handle);exit;
     }
 
+    /** Storage GC ve orphan tarama için mutlak dizin yolu. */
+    public function directory(): string
+    {
+        return $this->storageDir();
+    }
+
+    /** /media/branding/<ad> public URL'sini diskteki mutlak yola çevirir. */
+    public function absolutePathFromUrl(?string $url): ?string
+    {
+        if (!$url || !preg_match('#^/media/branding/([a-f0-9]{48}\.(?:jpe?g|png|webp|mp4|webm))$#i', $url, $match)) {
+            return null;
+        }
+        return $this->path($match[1]);
+    }
+
     private function path(string $storageName): string
     {
         return $this->storageDir().DIRECTORY_SEPARATOR.basename($storageName);

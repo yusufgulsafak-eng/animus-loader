@@ -35,6 +35,12 @@ final class LoaderStorage
         return ['storage_name'=>$storageName,'original_name'=>basename((string)$file['name']),'sha256'=>hash_file('sha256',$target),'size_bytes'=>filesize($target),'mime_type'=>$mime];
     }
 
+    /** Storage GC ve orphan tarama için mutlak dizin yolu. */
+    public function directory(): string
+    {
+        return $this->storageDir();
+    }
+
     public function path(string $storageName): string
     {
         return $this->storageDir().DIRECTORY_SEPARATOR.basename($storageName);

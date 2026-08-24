@@ -34,6 +34,21 @@ final class ImageStorage
         return '/uploads/games/'.$name;
     }
 
+    /** Storage GC ve orphan tarama için mutlak dizin yolu. */
+    public function directory(): string
+    {
+        return WEB_ROOT.DIRECTORY_SEPARATOR.'public'.DIRECTORY_SEPARATOR.'uploads'.DIRECTORY_SEPARATOR.'games';
+    }
+
+    /** /uploads/games/<ad> public yolunu diskteki mutlak yola çevirir. */
+    public function absolutePath(?string $publicPath): ?string
+    {
+        if(!$publicPath||!str_starts_with($publicPath,'/uploads/games/'))return null;
+        $name=basename($publicPath);
+        if(!preg_match('/^(cover|banner|icon)-[a-f0-9]{40}\.(jpg|png|webp)$/',$name))return null;
+        return $this->directory().DIRECTORY_SEPARATOR.$name;
+    }
+
     public function deleteManaged(?string $publicPath): void
     {
         if(!$publicPath||!str_starts_with($publicPath,'/uploads/games/'))return;

@@ -75,8 +75,12 @@ final class AdminService
         $pdo=Database::connection();$s=$pdo->prepare('SELECT * FROM games WHERE id=?');$s->execute([$id]);$g=$s->fetch();if(!$g)throw new \DomainException('Oyun bulunamadı.');
         $base=$g['slug'].'-kopya';$slug=$base;$n=2;while($this->slugExists($slug))$slug=$base.'-'.$n++;
         $g['name'].=' - Kopya';$g['slug']=$slug;$g['is_active']=0;$g['id']=null;
+        // DB'den gelen supported_stores JSON string; saveGame tekrar encode ederse cift kodlanir.
+        $g['supported_stores']=is_string($g['supported_stores']??null)?(json_decode($g['supported_stores'],true)?:['manual']):($g['supported_stores']??['manual']);
         $new=$this->saveGame($g,$actor);
         $pdo->prepare('INSERT INTO game_detection_rules(game_id,provider,rule_type,rule_value,expected_hash,sort_order,is_required) SELECT ?,provider,rule_type,rule_value,expected_hash,sort_order,is_required FROM game_detection_rules WHERE game_id=?')->execute([$new,$id]);
+        $pdo->prepare('INSERT IGNORE INTO game_categories(game_id,category_id) SELECT ?,category_id FROM game_categories WHERE game_id=?')->execute([$new,$id]);
+        (new AuditService())->write($actor,'game.duplicated','game',$new,['source_game_id'=>$id],['slug'=>$slug]);
         return $new;
     }
 
@@ -235,13 +239,20 @@ final class AdminService
         (new AuditService())->write($actor,$active?'game.activated':'game.deactivated','game',$id,$before,['is_active'=>$active]);
     }
 
-    public function deleteGame(int $id,int $actor): void
+    /** Silme mantigi tek merkezde: DeletionService (etki raporu, force, dosya karantinasi). */
+    public function deleteGame(int $id,int $actor,bool $force=false): array
     {
-        $pdo=Database::connection();$s=$pdo->prepare('SELECT * FROM games WHERE id=?');$s->execute([$id]);$game=$s->fetch();if(!$game)throw new DomainException('Oyun bulunamadı.');
-        $s=$pdo->prepare('SELECT pa.storage_name FROM patch_archives pa JOIN patch_versions pv ON pv.id=pa.patch_version_id JOIN patches p ON p.id=pv.patch_id WHERE p.game_id=?');$s->execute([$id]);$archives=$s->fetchAll(PDO::FETCH_COLUMN);
-        $pdo->beginTransaction();try{$pdo->prepare('DELETE prc FROM patch_release_channels prc JOIN patches p ON p.id=prc.patch_id WHERE p.game_id=?')->execute([$id]);$pdo->prepare('DELETE FROM games WHERE id=?')->execute([$id]);(new AuditService())->write($actor,'game.deleted','game',$id,$game,null);$pdo->commit();}catch(Throwable $error){$pdo->rollBack();throw $error;}
-        $images=new ImageStorage();foreach(['local_cover_path','local_banner_path','local_icon_path'] as $column)$images->deleteManaged($game[$column]??null);
-        $storage=new PatchStorage();foreach($archives as $name){$path=$storage->path((string)$name);if(is_file($path))unlink($path);}
+        return (new DeletionService())->deleteGame($id,$actor,$force);
+    }
+
+    public function deletePatchVersion(int $versionId,int $actor,bool $force=false): array
+    {
+        return (new DeletionService())->deletePatchVersion($versionId,$actor,$force);
+    }
+
+    public function deleteLoaderVersion(int $id,int $actor,bool $force=false): array
+    {
+        return (new DeletionService())->deleteLoaderVersion($id,$actor,$force);
     }
 
     public function saveGameImage(int $gameId,string $kind,array $file,int $actor): string
@@ -273,8 +284,24 @@ final class AdminService
     public function setPatchStatus(int $versionId,string $status,int $actor): void
     {
         if(!in_array($status,['DRAFT','TESTING','DISABLED','ARCHIVED'],true))throw new DomainException('Patch durumu geçersiz.');
-        $pdo=Database::connection();$s=$pdo->prepare('SELECT id,status FROM patch_versions WHERE id=?');$s->execute([$versionId]);$before=$s->fetch();if(!$before)throw new DomainException('Patch sürümü bulunamadı.');
-        $pdo->prepare('UPDATE patch_versions SET status=? WHERE id=?')->execute([$status,$versionId]);(new AuditService())->write($actor,'patch.status.updated','patch_version',$versionId,$before,['status'=>$status]);
+        $pdo=Database::connection();
+        $pdo->beginTransaction();
+        try{
+            $s=$pdo->prepare('SELECT pv.id,pv.status,pv.patch_id,pv.channel FROM patch_versions pv WHERE pv.id=? FOR UPDATE');$s->execute([$versionId]);$before=$s->fetch();
+            if(!$before)throw new DomainException('Patch sürümü bulunamadı.');
+            $pdo->prepare('UPDATE patch_versions SET status=? WHERE id=?')->execute([$status,$versionId]);
+            // PUBLISHED disina cikan bir surum kanalin aktif yayini olarak kalamaz:
+            // ya bir onceki yayina devredilir ya da kanal kaydi kaldirilir.
+            $s=$pdo->prepare('SELECT id FROM patch_release_channels WHERE active_patch_version_id=? FOR UPDATE');$s->execute([$versionId]);
+            if($s->fetchColumn()){
+                $s=$pdo->prepare("SELECT id FROM patch_versions WHERE patch_id=? AND channel=? AND id<>? AND status='PUBLISHED' ORDER BY published_at DESC,id DESC LIMIT 1");
+                $s->execute([$before['patch_id'],$before['channel'],$versionId]);$replacement=(int)($s->fetchColumn()?:0);
+                if($replacement)$pdo->prepare('UPDATE patch_release_channels SET active_patch_version_id=?,updated_by=? WHERE patch_id=? AND channel=?')->execute([$replacement,$actor,$before['patch_id'],$before['channel']]);
+                else $pdo->prepare('DELETE FROM patch_release_channels WHERE patch_id=? AND channel=?')->execute([$before['patch_id'],$before['channel']]);
+            }
+            (new AuditService())->write($actor,'patch.status.updated','patch_version',$versionId,$before,['status'=>$status]);
+            $pdo->commit();
+        }catch(Throwable $error){if($pdo->inTransaction())$pdo->rollBack();throw $error;}
     }
 
     public function saveCategory(array $input,int $actor): int
@@ -287,10 +314,9 @@ final class AdminService
         (new AuditService())->write($actor,$before?'category.updated':'category.created','category',$id,$before,$input);return $id;
     }
 
-    public function deleteCategory(int $id,int $actor): void
+    public function deleteCategory(int $id,int $actor,bool $force=true): array
     {
-        $pdo=Database::connection();$s=$pdo->prepare('SELECT * FROM categories WHERE id=?');$s->execute([$id]);$before=$s->fetch();if(!$before)throw new DomainException('Kategori bulunamadı.');
-        $pdo->prepare('DELETE FROM categories WHERE id=?')->execute([$id]);(new AuditService())->write($actor,'category.deleted','category',$id,$before,null);
+        return (new DeletionService())->deleteCategory($id,$actor,$force);
     }
 
     public function saveAnnouncement(array $input,int $actor): int
@@ -303,9 +329,9 @@ final class AdminService
         (new AuditService())->write($actor,$before?'announcement.updated':'announcement.created','announcement',$id,$before,$input);return $id;
     }
 
-    public function deleteAnnouncement(int $id,int $actor): void
+    public function deleteAnnouncement(int $id,int $actor): array
     {
-        $pdo=Database::connection();$s=$pdo->prepare('SELECT * FROM announcements WHERE id=?');$s->execute([$id]);$before=$s->fetch();if(!$before)throw new DomainException('Duyuru bulunamadı.');$pdo->prepare('DELETE FROM announcements WHERE id=?')->execute([$id]);(new AuditService())->write($actor,'announcement.deleted','announcement',$id,$before,null);
+        return (new DeletionService())->deleteAnnouncement($id,$actor);
     }
 
     public function saveBanner(array $input,array $file,int $actor): int
@@ -317,9 +343,9 @@ final class AdminService
         (new AuditService())->write($actor,'banner.created','banner',$id,null,$input);return $id;
     }
 
-    public function deleteBanner(int $id,int $actor): void
+    public function deleteBanner(int $id,int $actor): array
     {
-        $pdo=Database::connection();$s=$pdo->prepare('SELECT * FROM banners WHERE id=?');$s->execute([$id]);$before=$s->fetch();if(!$before)throw new DomainException('Banner bulunamadı.');$pdo->prepare('DELETE FROM banners WHERE id=?')->execute([$id]);(new ImageStorage())->deleteManaged($before['image_path']??null);(new AuditService())->write($actor,'banner.deleted','banner',$id,$before,null);
+        return (new DeletionService())->deleteBanner($id,$actor);
     }
 
     public function saveSubscription(array $input,int $actor): int

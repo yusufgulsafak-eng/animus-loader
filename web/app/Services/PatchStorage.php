@@ -45,6 +45,9 @@ final class PatchStorage
         return $tree;
     }
 
+    /** Storage GC ve orphan tarama için mutlak dizin yolu. */
+    public function directory(): string { return $this->storageDir(); }
+
     public function path(string $storageName): string { return $this->storageDir().DIRECTORY_SEPARATOR.basename($storageName); }
     private function storageDir(): string { $configured=Env::get('PATCH_STORAGE_PATH','storage/patches'); return preg_match('~^[a-zA-Z]:[\\\\/]~',$configured) ? $configured : WEB_ROOT.DIRECTORY_SEPARATOR.str_replace(['/', '\\'],DIRECTORY_SEPARATOR,$configured); }
 }
