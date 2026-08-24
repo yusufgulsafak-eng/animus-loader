@@ -37,7 +37,7 @@ final class AdminService
             'stats'=>$this->dashboard(),
             'games'=>$games,
             'categories'=>$pdo->query('SELECT * FROM categories ORDER BY sort_order,name')->fetchAll(),
-            'versions'=>$pdo->query('SELECT pv.*,g.name game_name,pa.original_name,pa.size_bytes FROM patch_versions pv JOIN patches p ON p.id=pv.patch_id JOIN games g ON g.id=p.game_id LEFT JOIN patch_archives pa ON pa.patch_version_id=pv.id ORDER BY pv.created_at DESC LIMIT 500')->fetchAll(),
+            'versions'=>$pdo->query('SELECT pv.*,g.name game_name,pa.original_name,pa.size_bytes,pa.source_type,pa.external_url FROM patch_versions pv JOIN patches p ON p.id=pv.patch_id JOIN games g ON g.id=p.game_id LEFT JOIN patch_archives pa ON pa.patch_version_id=pv.id ORDER BY pv.created_at DESC LIMIT 500')->fetchAll(),
             'users'=>$pdo->query('SELECT id,email,display_name,role,release_channel,status,created_at FROM users ORDER BY created_at DESC LIMIT 500')->fetchAll(),
             'subscriptions'=>$pdo->query('SELECT s.*,u.email,u.display_name FROM subscriptions s JOIN users u ON u.id=s.user_id ORDER BY s.created_at DESC LIMIT 500')->fetchAll(),
             'announcements'=>$pdo->query('SELECT * FROM announcements ORDER BY created_at DESC LIMIT 100')->fetchAll(),
@@ -84,11 +84,36 @@ final class AdminService
     {
         foreach(['game_id','version'] as $f)if(empty($in[$f]))throw new \DomainException("{$f} zorunludur.");
         if(!preg_match('/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/',$in['version']))throw new \DomainException('Patch version SemVer olmalıdır.');
-        $archive=(new PatchStorage())->storeUpload($file);$pdo=Database::connection();$pdo->beginTransaction();
+        $sourceType=($in['source_type']??'server')==='external'?'external':'server';
+        $archive=null;
+        if($sourceType==='external'){
+            $externalUrl=trim((string)($in['external_url']??''));
+            $sha256=strtolower(trim((string)($in['sha256']??'')));
+            $sizeBytes=(int)($in['size_bytes']??0);
+            $originalName=trim((string)($in['original_name']??''))?:'external-patch.zip';
+            $this->assertSafeExternalUrl($externalUrl);
+            if(!preg_match('/^[a-f0-9]{64}$/',$sha256))throw new DomainException('Harici patch için geçerli SHA-256 zorunludur.');
+            if($sizeBytes<1)throw new DomainException('Harici patch için dosya boyutu (byte) zorunludur.');
+            if(!preg_match('/\.zip$/i',$originalName))$originalName.='.zip';
+            $archive=['storage_name'=>'external-'.bin2hex(random_bytes(16)).'.zip','original_name'=>basename(str_replace('\\','/',$originalName)),'mime_type'=>'application/zip','sha256'=>$sha256,'size_bytes'=>$sizeBytes,'file_tree'=>[],'external_url'=>$externalUrl];
+        }else{
+            $archive=(new PatchStorage())->storeUpload($file);
+            $archive['external_url']=null;
+        }
+        $pdo=Database::connection();$pdo->beginTransaction();
         try{$s=$pdo->prepare('SELECT id FROM patches WHERE game_id=? LIMIT 1');$s->execute([(int)$in['game_id']]);$patchId=(int)($s->fetchColumn()?:0);if(!$patchId){$pdo->prepare('INSERT INTO patches(game_id,name) VALUES(?,?)')->execute([(int)$in['game_id'],'Türkçe Yama']);$patchId=(int)$pdo->lastInsertId();}
             $pdo->prepare('INSERT INTO patch_versions(patch_id,version,game_version,changelog,minimum_loader_version,status,channel,mandatory_update,access_type,schema_version,created_by) VALUES(?,?,?,?,?,?,?,?,?,1,?)')->execute([$patchId,$in['version'],$in['game_version']??null,$in['changelog']??null,$in['minimum_loader_version']??'0.1.0','DRAFT',in_array($in['channel']??'', ['stable','beta','internal'],true)?$in['channel']:'internal',!empty($in['mandatory_update'])?1:0,in_array($in['access_type']??'', ['free','premium'],true)?$in['access_type']:'free',$actor]);$versionId=(int)$pdo->lastInsertId();
-            $pdo->prepare('INSERT INTO patch_archives(patch_version_id,storage_name,original_name,mime_type,sha256,size_bytes,file_tree) VALUES(?,?,?,?,?,?,?)')->execute([$versionId,$archive['storage_name'],$archive['original_name'],$archive['mime_type'],$archive['sha256'],$archive['size_bytes'],json_encode($archive['file_tree'],JSON_UNESCAPED_SLASHES)]);$pdo->commit();(new AuditService())->write($actor,'patch.created','patch_version',$versionId,null,$in);return $versionId;
-        }catch(\Throwable $e){$pdo->rollBack();@unlink((new PatchStorage())->path($archive['storage_name']));throw $e;}
+            $pdo->prepare('INSERT INTO patch_archives(patch_version_id,source_type,external_url,storage_name,original_name,mime_type,sha256,size_bytes,file_tree) VALUES(?,?,?,?,?,?,?,?,?)')->execute([$versionId,$sourceType,$archive['external_url'],$archive['storage_name'],$archive['original_name'],$archive['mime_type'],$archive['sha256'],$archive['size_bytes'],json_encode($archive['file_tree'],JSON_UNESCAPED_SLASHES)]);$pdo->commit();(new AuditService())->write($actor,'patch.created','patch_version',$versionId,null,$in);return $versionId;
+        }catch(\Throwable $e){$pdo->rollBack();if($sourceType==='server'&&!empty($archive['storage_name']))@unlink((new PatchStorage())->path($archive['storage_name']));throw $e;}
+    }
+
+    private function assertSafeExternalUrl(string $url): void
+    {
+        if($url===''||!filter_var($url,FILTER_VALIDATE_URL))throw new DomainException("Geçerli harici indirme URL'si zorunludur.");
+        $parts=parse_url($url);if(strtolower((string)($parts['scheme']??''))!=='https')throw new DomainException('Harici patch URL yalnız HTTPS olabilir.');
+        $host=strtolower((string)($parts['host']??''));if($host===''||$host==='localhost'||str_ends_with($host,'.localhost'))throw new DomainException('Yerel ağ adresleri harici patch kaynağı olamaz.');
+        $ips=filter_var($host,FILTER_VALIDATE_IP)?[$host]:(gethostbynamel($host)?:[]);
+        foreach($ips as $ip)if(!filter_var($ip,FILTER_VALIDATE_IP,FILTER_FLAG_NO_PRIV_RANGE|FILTER_FLAG_NO_RES_RANGE))throw new DomainException('Private/rezerve IP adreslerine harici patch bağlantısı verilemez.');
     }
 
     public function saveActions(int $versionId,array $actions,int $actor): void
@@ -189,7 +214,7 @@ final class AdminService
 
     public function builderData(int $versionId): array
     {
-        $pdo=Database::connection();$s=$pdo->prepare('SELECT pv.id,pv.status,pv.version,pa.file_tree,pa.sha256,pa.size_bytes,pa.original_name FROM patch_versions pv LEFT JOIN patch_archives pa ON pa.patch_version_id=pv.id WHERE pv.id=?');$s->execute([$versionId]);$version=$s->fetch();if(!$version)throw new DomainException('Patch sürümü bulunamadı.');
+        $pdo=Database::connection();$s=$pdo->prepare('SELECT pv.id,pv.status,pv.version,pa.file_tree,pa.sha256,pa.size_bytes,pa.original_name,pa.source_type,pa.external_url FROM patch_versions pv LEFT JOIN patch_archives pa ON pa.patch_version_id=pv.id WHERE pv.id=?');$s->execute([$versionId]);$version=$s->fetch();if(!$version)throw new DomainException('Patch sürümü bulunamadı.');
         $s=$pdo->prepare('SELECT action_uuid id,action_type type,source_path source,destination_path destination,backup_enabled backup,expected_sha256,options_json options FROM patch_install_actions WHERE patch_version_id=? ORDER BY sort_order,id');$s->execute([$versionId]);$actions=$s->fetchAll();
         foreach($actions as &$action){$action['backup']=(bool)$action['backup'];$action['options']=json_decode($action['options']??'{}',true)?:[];}unset($action);
         $version['file_tree']=json_decode($version['file_tree']??'[]',true)?:[];$version['actions']=$actions;return $version;
