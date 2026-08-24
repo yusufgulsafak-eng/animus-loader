@@ -6,3 +6,13 @@
 td select{border:1px solid var(--line);background:#09080e;color:var(--text);border-radius:8px;padding:7px}
 .media-heading{margin-top:28px}.branding-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}.branding-media-form{display:grid;gap:16px}.branding-media-form label{display:grid;gap:8px}.branding-media-form select,.branding-media-form input[type="range"]{width:100%}.branding-preview{height:230px;overflow:hidden;border:1px solid var(--line);border-radius:14px;background:radial-gradient(circle at 70% 30%,#6935aa55,transparent 34%),#09080e;display:grid;place-items:center}.branding-preview img,.branding-preview video{width:100%;height:100%;object-fit:cover}.default-media-preview{display:grid;text-align:center;gap:7px;color:var(--muted)}.default-media-preview b{color:var(--text)}.media-actions{display:flex;gap:10px;flex-wrap:wrap}.media-upload.dragging{border-color:var(--accent);background:#b7f34a12}.media-upload.disabled{opacity:.45;pointer-events:none}.overlay-range{accent-color:var(--accent)}.overlay-output{color:var(--accent);font-weight:800}.branding-media-form [hidden]{display:none!important}
 @media(max-width:980px){.branding-grid{grid-template-columns:1fr}}
+
+/* --- Kalıcı silme + bakım paneli --- */
+.icon-btn.danger{color:#ff8b9d;background:#ff5b7314;box-shadow:inset 0 0 0 1px #ff5b7333}
+.icon-btn.danger:hover{background:#ff5b7326;color:#ffb3be}
+.icon-btn:disabled,.button:disabled{opacity:.45;cursor:not-allowed;transform:none}
+.maintenance-actions{display:grid;gap:12px;margin-top:16px}
+.maintenance-actions label{display:grid;gap:6px;font-size:13px;font-weight:700;color:#c9c4d2}
+.maintenance-actions input{width:100%;border:1px solid var(--line);background:#09080e;color:var(--text);border-radius:11px;padding:12px;outline:none}
+#panel-maintenance .code-editor{min-height:220px;margin-top:18px}
+#panel-maintenance .stats-grid{margin-bottom:18px}

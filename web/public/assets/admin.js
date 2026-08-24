@@ -227,5 +227,113 @@
     form.querySelector('.reset-branding').addEventListener('click',async()=>{if(!confirm('Bu arka plan Animus varsayılanına döndürülsün mü?'))return;try{await api({action:'reset_branding_media',slot:form.dataset.slot});toast('Varsayılan arka plan geri yüklendi');location.hash='loader';location.reload();}catch(error){toast(error.message,true);}});
   });
   window.addEventListener('beforeunload',()=>document.querySelectorAll('.branding-preview').forEach(releasePreview));
+
+  // ---------------------------------------------------------------
+  // Kalıcı silme akışı: önce sunucudan etki raporu, sonra onay.
+  // ---------------------------------------------------------------
+  const DELETE_ACTIONS = {
+    game:            {action:'delete_game',            key:'game_id'},
+    patch_version:   {action:'delete_patch_version',   key:'version_id'},
+    loader_version:  {action:'delete_loader_version',  key:'id'},
+    category:        {action:'delete_category',        key:'id'},
+    announcement:    {action:'delete_announcement',    key:'id'},
+    banner:          {action:'delete_banner',          key:'id'},
+    subscription:    {action:'delete_subscription',    key:'id'},
+    user:            {action:'delete_user',            key:'id'}
+  };
+  const DESCRIBABLE = new Set(['game','patch_version','loader_version','category','user']);
+  const humanBytes = value => {
+    const n = Number(value || 0);
+    if (!n) return '0 B';
+    const units = ['B','KB','MB','GB','TB'];
+    const i = Math.min(units.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
+    return (n / Math.pow(1024, i)).toFixed(i ? 1 : 0) + ' ' + units[i];
+  };
+  const impactText = report => {
+    const lines = [];
+    (report.blocking || []).forEach(item => lines.push('! ' + item));
+    const c = report.cascade || {};
+    if (c.patch_versions !== undefined) lines.push('Silinecek yama sürümü: ' + c.patch_versions + ' (yayında: ' + (c.published_versions || 0) + ')');
+    if (c.archive_bytes) lines.push('Karantinaya alınacak arşiv: ' + humanBytes(c.archive_bytes));
+    if (c.package_bytes) lines.push('Karantinaya alınacak paket: ' + humanBytes(c.package_bytes));
+    if (c.download_logs_detached) lines.push('İndirme kaydı korunacak (anonimleşir): ' + c.download_logs_detached);
+    if (c.games_unlinked) lines.push('Kategorisi kaldırılacak oyun: ' + c.games_unlinked);
+    if (c.replacement_version) lines.push('Kanal şu sürüme geri dönecek: ' + c.replacement_version);
+    if (c.is_active_release && !c.replacement_version) lines.push('Bu kanalda yayında yama kalmayacak.');
+    if (c.subscriptions) lines.push('Silinecek abonelik: ' + c.subscriptions);
+    if (c.note) lines.push(c.note);
+    return lines.join('\n');
+  };
+  const runDelete = async button => {
+    const entity = button.dataset.entity;
+    const id = Number(button.dataset.id);
+    const label = button.dataset.label || ('#' + id);
+    const map = DELETE_ACTIONS[entity];
+    if (!map || !id) return;
+
+    let force = false;
+    let detail = '';
+    if (DESCRIBABLE.has(entity)) {
+      try {
+        const report = await api({action:'describe_deletion', entity, id});
+        force = Boolean(report.requires_force);
+        const text = impactText(report);
+        if (text) detail = '\n\n' + text;
+      } catch (error) { toast(error.message, true); return; }
+    }
+    if (!confirm('KALICI SİLME\n\n"' + label + '" kalıcı olarak silinecek.' + detail + '\n\nDevam edilsin mi?')) return;
+    if (force && !confirm('Bu kayıt yayında veya bağımlılığı var.\nYine de silmek istediğinize emin misiniz?')) return;
+
+    button.disabled = true;
+    try {
+      const payload = {action: map.action, force};
+      payload[map.key] = id;
+      const data = await api(payload);
+      toast('Silindi: ' + ((data && data.label) || label));
+      location.reload();
+    } catch (error) { button.disabled = false; toast(error.message, true); }
+  };
+  document.querySelectorAll('.delete-entity').forEach(button => button.addEventListener('click', () => runDelete(button)));
+
+  // ---------------------------------------------------------------
+  // Bakım / depolama paneli
+  // ---------------------------------------------------------------
+  const maintenanceOutput = document.querySelector('#maintenance-output');
+  const renderStorage = status => {
+    const grid = document.querySelector('#storage-stats');
+    if (!grid || !status) return;
+    const cards = [
+      ['Bekleyen silme', status.pending],
+      ['Başarısız silme', status.failed],
+      ['Karantinadaki dosya', status.trash_files],
+      ['Karantina boyutu', humanBytes(status.trash_bytes)]
+    ];
+    grid.innerHTML = cards.map(([label, value]) => '<article class="stat"><small>' + label + '</small><strong>' + value + '</strong></article>').join('');
+  };
+  const loadStorage = async () => {
+    if (!document.querySelector('#storage-stats')) return;
+    try { renderStorage(await api({action:'storage_status'})); } catch (error) { /* panel açılmamış olabilir */ }
+  };
+  document.querySelector('#refresh-storage')?.addEventListener('click', async () => {
+    try { renderStorage(await api({action:'storage_status'})); toast('Depolama durumu güncellendi'); }
+    catch (error) { toast(error.message, true); }
+  });
+  document.querySelectorAll('[data-maintenance]').forEach(button => button.addEventListener('click', async () => {
+    if (button.dataset.confirm && !confirm(button.dataset.confirm)) return;
+    const payload = {action: button.dataset.maintenance};
+    if (button.dataset.days) payload.days = Number(document.querySelector('#' + button.dataset.days)?.value || 0);
+    if (button.dataset.apply) payload.apply = true;
+    button.disabled = true;
+    try {
+      const data = await api(payload);
+      maintenanceOutput.textContent = JSON.stringify(data, null, 2);
+      toast('İşlem tamamlandı');
+      loadStorage();
+    } catch (error) { maintenanceOutput.textContent = 'Hata: ' + error.message; toast(error.message, true); }
+    finally { button.disabled = false; }
+  }));
+  if (location.hash.slice(1) === 'maintenance') loadStorage();
+  document.querySelector('[data-panel="maintenance"]')?.addEventListener('click', loadStorage);
+
   addAction({type:'REPLACE_FILE',source:'files/translation.dat',destination:'Localization/translation.dat',backup:true});
 })();
