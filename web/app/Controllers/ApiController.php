@@ -69,6 +69,7 @@ final class ApiController
             'delete_game'=>(function()use($admin,$body,$uid){$admin->deleteGame((int)($body['game_id']??0),$uid);return null;})(),
             'upload_game_image'=>['path'=>$admin->saveGameImage((int)($_POST['game_id']??0),(string)($_POST['kind']??''),$_FILES['image']??[],$uid)],
             'delete_game_image'=>(function()use($admin,$body,$uid){$admin->deleteGameImage((int)($body['game_id']??0),(string)($body['kind']??''),$uid);return null;})(),
+            'inspect_external_patch'=>$admin->inspectExternalPatch((string)($body['url']??'')),
             'create_patch'=>['id'=>$admin->createPatchVersion($_POST,$_FILES['archive']??[],$uid)],
             'load_patch_builder'=>$admin->builderData((int)($body['version_id']??0)),
             'save_actions'=>(function()use($admin,$body,$uid){$admin->saveActions((int)($body['version_id']??0),$body['actions']??[],$uid);return null;})(),
