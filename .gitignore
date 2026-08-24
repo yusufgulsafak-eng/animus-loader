@@ -1,0 +1,13 @@
+.env
+.local/
+web/storage/patches/*
+!web/storage/patches/.gitkeep
+web/storage/loader/*
+!web/storage/loader/.gitkeep
+web/storage/media/branding/*
+!web/storage/media/branding/.gitkeep
+web/public/uploads/games/*
+!web/public/uploads/games/.gitkeep
+loader/node_modules/
+loader/dist/
+loader/src-tauri/target/
