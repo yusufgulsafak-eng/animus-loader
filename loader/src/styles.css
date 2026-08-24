@@ -6,3 +6,10 @@
 .register-form{padding-top:4vw;padding-bottom:4vw}.register-form h2{margin-top:8px}.register-form label{margin-top:13px}.register-form .login-submit{margin-top:18px}.auth-switch{justify-content:center;gap:8px;align-items:center;color:var(--muted);font-size:13px}.auth-switch button{padding:0}
 @media(max-width:1250px){.horizontal-games{grid-template-columns:repeat(3,1fr)}.detail-grid{grid-template-columns:repeat(3,1fr)}}@media(max-width:760px){body{min-width:0}.horizontal-games,.game-grid{grid-template-columns:repeat(2,1fr)}.shell>header{padding:10px}.shell nav{display:none}.detail-grid{grid-template-columns:repeat(2,1fr)}}
 .login-visual,.shell{isolation:isolate}.shell{position:relative}.background-media-layer{position:absolute;inset:0;z-index:0;overflow:hidden;pointer-events:none;background:var(--bg)}.shell>.background-media-layer{position:fixed}.background-media-layer>img,.background-media-layer>video{width:100%;height:100%;display:block;object-fit:cover}.background-media-overlay{position:absolute;inset:0;background:#000;pointer-events:none}.login-visual>.background-media-layer{z-index:0}.login-visual>:not(.background-media-layer){position:relative;z-index:2}.login-visual:after{z-index:1}.shell>main{position:relative;z-index:1}.shell>.rightbar{z-index:3}
+
+/* Dynamic loader logo from /api/loader/config logo_url. The A remains as fallback. */
+.brand-logo,.loader-logo{overflow:hidden;flex:0 0 auto}
+.brand-logo b,.loader-logo b{display:grid;place-items:center;width:100%;height:100%}
+.brand-logo.has-image,.loader-logo.has-image{background:transparent!important}
+.brand-logo.has-image img,.loader-logo.has-image img{display:block;width:100%;height:100%;object-fit:contain}
+.brand-logo.has-image b,.loader-logo.has-image b{display:none}
