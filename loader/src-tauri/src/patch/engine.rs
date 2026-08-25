@@ -4,7 +4,7 @@ use crate::{
     game_detection::validate_root,
     models::{
         Action, ActionType, ChangeKind, ChangeRecord, DryRun, Installation, Manifest, Progress,
-        Verification,
+        UninstallReport, Verification,
     },
     patch::actions::PatchActionHandler,
     security::{
@@ -81,6 +81,41 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<()> {
     Ok(())
 }
 
+/// "1.2.0" >= "1.1.3" karsilastirmasi. Pre-release/build eki yok sayilir.
+pub fn version_at_least(current: &str, minimum: &str) -> bool {
+    fn parts(value: &str) -> Vec<u64> {
+        value
+            .trim()
+            .split(['-', '+'])
+            .next()
+            .unwrap_or("")
+            .split('.')
+            .map(|piece| piece.trim().parse::<u64>().unwrap_or(0))
+            .collect()
+    }
+    let (current, minimum) = (parts(current), parts(minimum));
+    for index in 0..current.len().max(minimum.len()) {
+        let a = current.get(index).copied().unwrap_or(0);
+        let b = minimum.get(index).copied().unwrap_or(0);
+        if a != b {
+            return a > b;
+        }
+    }
+    true
+}
+
+/// Yama, kendisinden yeni bir loader istiyorsa kurulum baslamadan durdurulur.
+/// Bu kontrol eskiden hicbir yerde yapilmiyordu; manifestteki alan olu veriydi.
+pub fn ensure_loader_version(manifest: &Manifest, loader_version: &str) -> Result<()> {
+    let minimum = manifest.patch.minimum_loader_version.trim();
+    if minimum.is_empty() || version_at_least(loader_version, minimum) {
+        return Ok(());
+    }
+    Err(LoaderError::Manifest(format!(
+        "Bu yama en az {minimum} sürümünde loader gerektiriyor (kurulu: {loader_version}). Önce loader'ı güncelleyin."
+    )))
+}
+
 pub fn dry_run(manifest: &Manifest, game_root: &Path) -> Result<DryRun> {
     validate_manifest(manifest)?;
     validate_root(game_root, &manifest.detection.required_files)?;
@@ -150,8 +185,11 @@ pub fn install(
     manifest: &Manifest,
     game_root: &Path,
     archive_url: &str,
+    loader_version: &str,
+    force: bool,
 ) -> Result<Installation> {
     validate_manifest(manifest)?;
+    ensure_loader_version(manifest, loader_version)?;
     validate_root(game_root, &manifest.detection.required_files)?;
     assert_not_running(manifest.detection.process_name.as_deref())?;
     let plan = dry_run(manifest, game_root)?;
@@ -176,7 +214,8 @@ pub fn install(
         },
     );
     let temp = tempfile::Builder::new().prefix("animus-patch-").tempdir()?;
-    let archive = temp.path().join("patch.zip");
+    // Arsiv kalici onbellege iner: baglanti koparsa ayni dosyadan devam edilir.
+    let archive = crate::download::cache_path(&manifest.archive.sha256)?;
     crate::download::download(
         app,
         archive_url,
@@ -197,6 +236,24 @@ pub fn install(
             bytes_per_second: None,
         },
     );
+    // Guncelleme akisi: yeni surum uygulanmadan once onceki yama geri alinir.
+    // Aksi halde yeni backup "orijinal" diye zaten yamali dosyalari kaydeder ve
+    // "Yamayi Kaldir" oyunu hicbir zaman gercek vanilla haline donduremez.
+    if let Some(previous) = crate::backup::find_installation(manifest.game.id)? {
+        restore_previous(game_root, &previous, force)?;
+        let _ = app.emit(
+            "patch-progress",
+            Progress {
+                stage: "restore".into(),
+                percent: 59,
+                message: "Önceki yama kaldırıldı, oyun orijinal haline döndürüldü".into(),
+                downloaded_bytes: None,
+                total_bytes: None,
+                bytes_per_second: None,
+            },
+        );
+    }
+
     let backup_id = uuid::Uuid::new_v4().to_string();
     let backup = backup_root(&backup_id)?;
     fs::create_dir_all(backup.join("files"))?;
@@ -285,6 +342,7 @@ pub fn install(
     }
     write_json_atomic(&backup.join("metadata.json"), &installation)?;
     write_json_atomic(&installation_path(manifest.game.id)?, &installation)?;
+    let _ = fs::remove_file(&archive);
     let _ = crate::logging::event(
         "info",
         "install",
@@ -589,32 +647,76 @@ pub fn verify_installation(game_id: u64, game_root: &Path) -> Result<Verificatio
     let install: Installation = read_json(&installation_path(game_id)?)?;
     verify_records(game_root, &install.changes)
 }
-pub fn uninstall(game_id: u64, game_root: &Path) -> Result<()> {
+/// Onceki kurulumu vanilla haline dondurur. `force`, kullanici dosyalari elle
+/// degistirmis olsa bile yedekten geri yazmaya izin verir.
+fn restore_previous(game_root: &Path, previous: &Installation, force: bool) -> Result<()> {
+    let same_root = PathBuf::from(&previous.game_root)
+        .canonicalize()
+        .ok()
+        .zip(game_root.canonicalize().ok())
+        .map(|(a, b)| a == b)
+        .unwrap_or(false);
+    if !same_root {
+        return Err(LoaderError::Conflict(format!(
+            "Bu oyunun yaması başka bir klasörde kurulu: {}. Önce oradan kaldırın.",
+            previous.game_root
+        )));
+    }
+    let backup = backup_root(&previous.backup_id)?;
+    if !backup.join("metadata.json").is_file() {
+        if !force {
+            return Err(LoaderError::Conflict(
+                "Önceki kurulumun yedeği bulunamadı. Zorla devam etmek dosyaları kalıcı değiştirebilir.".into(),
+            ));
+        }
+        crate::backup::close_installation(previous)?;
+        return Ok(());
+    }
+    let check = verify_records(game_root, &previous.changes)?;
+    if !check.valid && !force {
+        return Err(LoaderError::Conflict(format!(
+            "Önceki yamanın dosyaları değişmiş: {}. Önce 'Yamayı Kaldır' çalıştırın veya güncellemeyi zorlayın.",
+            check.conflicts.join(", ")
+        )));
+    }
+    rollback_changes(game_root, &backup, &previous.changes)?;
+    crate::backup::close_installation(previous)?;
+    Ok(())
+}
+
+pub fn uninstall(game_id: u64, game_root: &Path, force: bool) -> Result<UninstallReport> {
     let path = installation_path(game_id)?;
-    let mut install: Installation = read_json(&path)?;
+    let install: Installation = read_json(&path)?;
     if PathBuf::from(&install.game_root).canonicalize()? != game_root.canonicalize()? {
         return Err(LoaderError::Conflict(
             "Kurulum manifestindeki oyun kökü farklı".into(),
         ));
     }
     let check = verify_records(game_root, &install.changes)?;
-    if !check.valid {
+    if !check.valid && !force {
         return Err(LoaderError::Conflict(format!(
             "Dosyalar kurulumdan sonra değişmiş: {}",
             check.conflicts.join(", ")
         )));
     }
     let backup = backup_root(&install.backup_id)?;
+    if !backup.join("metadata.json").is_file() && !force {
+        return Err(LoaderError::Conflict(
+            "Kurulumun yedeği bulunamadı; orijinal dosyalar geri yüklenemez.".into(),
+        ));
+    }
     rollback_changes(game_root, &backup, &install.changes)?;
-    install.active = false;
-    write_json_atomic(&backup.join("metadata.json"), &install)?;
-    fs::remove_file(path)?;
+    crate::backup::close_installation(&install)?;
     let _ = crate::logging::event(
         "info",
         "uninstall",
         &format!("Yama kaldırıldı ve orijinal dosyalar geri yüklendi: game_id={game_id}"),
     );
-    Ok(())
+    Ok(UninstallReport {
+        restored: install.changes.len() as u64,
+        forced: force && !check.valid,
+        conflicts: check.conflicts,
+    })
 }
 fn assert_not_running(process_name: Option<&str>) -> Result<()> {
     let Some(expected) = process_name else {
@@ -700,6 +802,92 @@ mod tests {
             },
         }
     }
+    #[test]
+    fn version_gate_blocks_old_loader() {
+        let mut m = manifest();
+        m.patch.minimum_loader_version = "1.2.0".into();
+        assert!(ensure_loader_version(&m, "1.1.9").is_err());
+        assert!(ensure_loader_version(&m, "1.2.0").is_ok());
+        assert!(ensure_loader_version(&m, "1.2.1").is_ok());
+        assert!(ensure_loader_version(&m, "2.0.0").is_ok());
+    }
+
+    #[test]
+    fn version_compare_handles_shapes() {
+        assert!(version_at_least("1.0.0", "1.0"));
+        assert!(version_at_least("0.2.0-beta.1", "0.2.0"));
+        assert!(!version_at_least("0.9.9", "1.0.0"));
+        assert!(version_at_least("10.0.0", "9.9.9"));
+    }
+
+    #[test]
+    fn update_over_existing_install_restores_vanilla_first() {
+        // Regresyon testi: v1 kurulu iken v2 kurulunca yeni backup "orijinal"
+        // olarak yamali dosyayi kaydediyordu ve kaldirma vanilla'ya donmuyordu.
+        let temp = tempfile::tempdir().expect("temp");
+        let game = temp.path().join("Game");
+        let backup_v1 = temp.path().join("backup-v1");
+        let extracted = temp.path().join("extracted");
+        fs::create_dir_all(game.join("Data")).unwrap();
+        fs::create_dir_all(backup_v1.join("files")).unwrap();
+        fs::create_dir_all(extracted.join("files")).unwrap();
+        fs::write(game.join("Data/text.dat"), b"VANILLA").unwrap();
+        fs::write(extracted.join("files/text.dat"), b"PATCH V1").unwrap();
+
+        let action = Action {
+            id: uuid::Uuid::new_v4().to_string(),
+            kind: ActionType::ReplaceFile,
+            source: Some("files/text.dat".into()),
+            destination: "Data/text.dat".into(),
+            backup: true,
+            expected_sha256: None,
+            options: Default::default(),
+        };
+        let mut changes = Vec::new();
+        CopyHandler
+            .apply(&action, &extracted, &game, &backup_v1, &mut changes)
+            .expect("v1 apply");
+        assert_eq!(fs::read(game.join("Data/text.dat")).unwrap(), b"PATCH V1");
+
+        let previous = Installation {
+            schema_version: 1,
+            game_id: 1,
+            game_name: "Demo".into(),
+            patch_id: 1,
+            patch_version: "1.0.0".into(),
+            game_root: game.display().to_string(),
+            backup_id: "backup-v1".into(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            active: true,
+            changes: changes.clone(),
+        };
+
+        // restore_previous mantigi: v2 uygulanmadan once vanilla'ya donulur.
+        assert!(verify_records(&game, &previous.changes).unwrap().valid);
+        rollback_changes(&game, &backup_v1, &previous.changes).expect("restore");
+        assert_eq!(
+            fs::read(game.join("Data/text.dat")).unwrap(),
+            b"VANILLA",
+            "guncelleme oncesi oyun vanilla haline donmeli"
+        );
+
+        // v2 artik vanilla uzerine kurulur, dolayisiyla yedegi de vanilla olur.
+        fs::write(extracted.join("files/text.dat"), b"PATCH V2").unwrap();
+        let backup_v2 = temp.path().join("backup-v2");
+        fs::create_dir_all(backup_v2.join("files")).unwrap();
+        let mut changes_v2 = Vec::new();
+        CopyHandler
+            .apply(&action, &extracted, &game, &backup_v2, &mut changes_v2)
+            .expect("v2 apply");
+        assert_eq!(fs::read(game.join("Data/text.dat")).unwrap(), b"PATCH V2");
+        rollback_changes(&game, &backup_v2, &changes_v2).expect("v2 uninstall");
+        assert_eq!(
+            fs::read(game.join("Data/text.dat")).unwrap(),
+            b"VANILLA",
+            "v2 kaldirilinca vanilla'ya donmeli, v1'e degil"
+        );
+    }
+
     #[test]
     fn valid_manifest() {
         assert!(validate_manifest(&manifest()).is_ok())

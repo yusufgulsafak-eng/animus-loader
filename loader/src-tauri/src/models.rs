@@ -126,6 +126,36 @@ pub struct Verification {
     pub checked: u64,
     pub conflicts: Vec<String>,
 }
+/// Diskteki kurulum kayitlarinin ozeti. Katalog "kurulu mu" bilgisini
+/// artik localStorage yerine bu listeden alir.
+#[derive(Debug, Clone, Serialize)]
+pub struct InstallationSummary {
+    pub game_id: u64,
+    pub game_name: String,
+    pub patch_id: u64,
+    pub patch_version: String,
+    pub game_root: String,
+    pub backup_id: String,
+    pub created_at: String,
+    pub root_exists: bool,
+    pub backup_exists: bool,
+    pub change_count: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UninstallReport {
+    pub restored: u64,
+    pub forced: bool,
+    pub conflicts: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PruneReport {
+    pub removed_backups: u64,
+    pub freed_bytes: u64,
+    pub cache_bytes: u64,
+}
+
 #[derive(Debug, Serialize)]
 pub struct BackupInfo {
     pub id: String,

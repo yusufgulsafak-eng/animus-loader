@@ -1,10 +1,21 @@
 Options -Indexes
+
 RewriteEngine On
-RewriteCond %{REQUEST_FILENAME} !-f
-RewriteCond %{REQUEST_FILENAME} !-d
+
+# API isteklerini fiziksel api/* klasörlerine girmeden
+# doğrudan merkezi front controller'a gönder.
+RewriteRule ^api(?:/.*)?$ index.php [QSA,L]
+
+# Health endpoint
+RewriteRule ^health/?$ index.php [QSA,L]
+
+# Gerçek public dosyaları normal servis et
+RewriteCond %{REQUEST_FILENAME} -f
+RewriteRule ^ - [L]
+
+# Geri kalan istekleri front controller'a gönder
 RewriteRule ^ index.php [QSA,L]
 
 <FilesMatch "^\.">
   Require all denied
 </FilesMatch>
-

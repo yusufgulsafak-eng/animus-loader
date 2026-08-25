@@ -22,6 +22,39 @@ fn validate_public_https_url(url: &reqwest::Url) -> std::result::Result<(), Stri
     Ok(())
 }
 
+/// Indirme onbellegi SHA-256 ile anahtarlanir: ayni icerik ayni dosyaya yazilir,
+/// bu yuzden yarim kalan indirme guvenle devam ettirilebilir. Farkli bir yama
+/// asla ayni dosyaya denk gelmez.
+pub fn cache_path(sha256: &str) -> Result<std::path::PathBuf> {
+    let normalized = sha256.to_ascii_lowercase();
+    if normalized.len() != 64 || !normalized.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(LoaderError::Integrity("Archive SHA-256 bicimi gecersiz".into()));
+    }
+    let dir = crate::storage::data_root()?.join("cache");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir.join(format!("{normalized}.zip")))
+}
+
+/// Tamamlanmis kurulumdan sonra veya bakim sirasinda onbellegi bosaltir.
+pub fn clear_cache() -> Result<u64> {
+    let dir = crate::storage::data_root()?.join("cache");
+    if !dir.is_dir() {
+        return Ok(0);
+    }
+    let mut freed = 0u64;
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
+        if !path.is_file() {
+            continue;
+        }
+        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        if std::fs::remove_file(&path).is_ok() {
+            freed += size;
+        }
+    }
+    Ok(freed)
+}
+
 pub fn download(
     app: &AppHandle,
     url: &str,
@@ -43,6 +76,18 @@ pub fn download(
         }))
         .timeout(std::time::Duration::from_secs(1800))
         .build()?;
+    // Onbellekte tam dosya varsa yeniden indirme; hash tutuyorsa dogrudan kullan.
+    if let Ok(metadata)=std::fs::metadata(target) {
+        if metadata.len()==expected_size {
+            if hash_file(target)?.eq_ignore_ascii_case(expected_hash) {
+                let _=app.emit("patch-progress", Progress { stage:"download".into(), percent:50, message:"Yama onbellekten kullaniliyor".into(), downloaded_bytes:Some(expected_size), total_bytes:Some(expected_size), bytes_per_second:None });
+                return Ok(());
+            }
+            let _=std::fs::remove_file(target);
+        } else if metadata.len()>expected_size {
+            let _=std::fs::remove_file(target);
+        }
+    }
     let existing=std::fs::metadata(target).map(|m|m.len()).unwrap_or(0).min(expected_size);
     let mut request=client.get(url);
     if existing>0 && existing<expected_size { request=request.header(reqwest::header::RANGE,format!("bytes={existing}-")); }
