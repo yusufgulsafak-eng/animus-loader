@@ -97,7 +97,14 @@ pub fn download(
     let mut output=if resumed { let mut f=std::fs::OpenOptions::new().read(true).write(true).open(target)?;f.seek(SeekFrom::Start(existing))?;f } else { File::create(target)? };
     let mut downloaded=if resumed { existing } else { 0 };
     if !resumed {
-        if let Some(length)=response.content_length() { if length!=expected_size { return Err(LoaderError::Integrity(format!("Beklenen {expected_size}, sunucu {length} bayt"))); } }
+        if let Some(length)=response.content_length() {
+            if length!=expected_size {
+                let _=std::fs::remove_file(target);
+                return Err(LoaderError::Integrity(format!(
+                    "İndirilen dosya boyutu uyuşmuyor. Beklenen: {expected_size} bayt, sunucu: {length} bayt"
+                )));
+            }
+        }
     }
     let mut buffer = [0u8; 128 * 1024];
     let started = Instant::now();
@@ -112,7 +119,12 @@ pub fn download(
         let _ = app.emit("patch-progress", Progress { stage:"download".into(), percent, message:if resumed{"Yama indirmesi devam ettiriliyor".into()}else{"Yama indiriliyor".into()}, downloaded_bytes:Some(downloaded), total_bytes:Some(expected_size), bytes_per_second:Some(speed) });
     }
     output.flush()?;output.sync_all()?;
-    if downloaded != expected_size { return Err(LoaderError::Integrity("İndirilen dosya boyutu uyuşmuyor".into())); }
+    if downloaded != expected_size {
+        let _=std::fs::remove_file(target);
+        return Err(LoaderError::Integrity(format!(
+            "İndirilen dosya boyutu uyuşmuyor. Beklenen: {expected_size} bayt, indirilen: {downloaded} bayt"
+        )));
+    }
     let actual=hash_file(target)?;
     if !actual.eq_ignore_ascii_case(expected_hash) { let _=std::fs::remove_file(target);return Err(LoaderError::Integrity("İndirilen yama dosyasının bütünlüğü doğrulanamadı.".into())); }
     let _=crate::logging::event("info","hash","Yama SHA-256 doğrulaması başarılı");
