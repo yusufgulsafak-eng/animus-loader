@@ -736,6 +736,47 @@ async fn launch_ps_game(
 
 
 // ============================================================
+// MANAGED PLAYSTATION GAME ROOT
+// ============================================================
+
+/// PS1/PS2 paketleri normal bir PC oyun klasörüne kurulmaz.
+/// Animus kendi yönetilen klasörünü oluşturur ve kurulum motoruna bu yolu verir.
+/// Kullanıcıdan klasör seçmesi istenmez.
+#[tauri::command(rename_all = "camelCase")]
+fn prepare_ps_game_root(
+    game_id: u64,
+) -> Result<String, LoaderError> {
+    if game_id == 0 {
+        return Err(LoaderError::Other(
+            "Geçersiz PlayStation oyun kimliği.".into(),
+        ));
+    }
+
+    let root = dirs::data_local_dir()
+        .ok_or_else(|| {
+            LoaderError::Other(
+                "Windows LocalAppData klasörü bulunamadı.".into(),
+            )
+        })?
+        .join("AnimusPatchLoader")
+        .join("emulated-games")
+        .join(format!("game-{game_id}"));
+
+    fs::create_dir_all(&root).map_err(|error| {
+        LoaderError::Other(format!(
+            "PlayStation oyun klasörü oluşturulamadı: {error}"
+        ))
+    })?;
+
+    let resolved = root
+        .canonicalize()
+        .unwrap_or(root);
+
+    Ok(resolved.display().to_string())
+}
+
+
+// ============================================================
 // FIND PS IMAGE INSIDE INSTALLED ANIMUS PACKAGE
 // ============================================================
 
@@ -1286,6 +1327,7 @@ pub fn run() {
                 // Animus Emu
                 select_ps_game_file,
                 launch_ps_game,
+                prepare_ps_game_root,
                 launch_installed_ps_game
             ]
         )
