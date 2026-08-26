@@ -616,6 +616,348 @@ fn emulator_candidates(
 
 
 // ============================================================
+// DUCKSTATION AUTOMATIC INSTALL
+// ============================================================
+
+const DUCKSTATION_RELEASE_API: &str =
+    "https://api.github.com/repos/stenzek/duckstation/releases/tags/latest";
+const DUCKSTATION_WINDOWS_ASSET: &str =
+    "duckstation-windows-x64-release.zip";
+
+fn emulator_managed_directory(
+    platform: PsPlatform,
+) -> Result<PathBuf, LoaderError> {
+    let root = dirs::data_local_dir()
+        .ok_or_else(|| {
+            LoaderError::Other(
+                "Windows LocalAppData klasörü bulunamadı.".into(),
+            )
+        })?
+        .join("AnimusPatchLoader")
+        .join("emulators");
+
+    fs::create_dir_all(&root).map_err(|error| {
+        LoaderError::Other(format!(
+            "Animus emülatör klasörü oluşturulamadı: {error}"
+        ))
+    })?;
+
+    Ok(match platform {
+        PsPlatform::Ps1 => root.join("duckstation"),
+        PsPlatform::Ps2 => root.join("pcsx2"),
+    })
+}
+
+fn github_client() -> Result<reqwest::blocking::Client, LoaderError> {
+    reqwest::blocking::Client::builder()
+        .user_agent("Animus-Patch-Loader/0.1")
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()
+        .map_err(|error| {
+            LoaderError::Other(format!(
+                "Emülatör indirme istemcisi hazırlanamadı: {error}"
+            ))
+        })
+}
+
+fn duckstation_latest_asset(
+    client: &reqwest::blocking::Client,
+) -> Result<(String, Option<String>), LoaderError> {
+    let release: serde_json::Value = client
+        .get(DUCKSTATION_RELEASE_API)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .and_then(|response| response.error_for_status())
+        .map_err(|error| {
+            LoaderError::Other(format!(
+                "DuckStation sürüm bilgisi alınamadı: {error}"
+            ))
+        })?
+        .json()
+        .map_err(|error| {
+            LoaderError::Other(format!(
+                "DuckStation sürüm bilgisi okunamadı: {error}"
+            ))
+        })?;
+
+    let assets = release
+        .get("assets")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| {
+            LoaderError::Other(
+                "DuckStation yayın dosyaları bulunamadı.".into(),
+            )
+        })?;
+
+    let asset = assets
+        .iter()
+        .find(|asset| {
+            asset
+                .get("name")
+                .and_then(|value| value.as_str())
+                .map(|name| name.eq_ignore_ascii_case(DUCKSTATION_WINDOWS_ASSET))
+                .unwrap_or(false)
+        })
+        .ok_or_else(|| {
+            LoaderError::Other(format!(
+                "Resmî DuckStation Windows paketi bulunamadı: {DUCKSTATION_WINDOWS_ASSET}"
+            ))
+        })?;
+
+    let url = asset
+        .get("browser_download_url")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| {
+            LoaderError::Other(
+                "DuckStation indirme adresi bulunamadı.".into(),
+            )
+        })?
+        .to_string();
+
+    // GitHub yeni release API'lerinde asset digest alanini sha256:<hash>
+    // biciminde dondurur. Alan yoksa indirme yine resmî GitHub URL'sinden gelir.
+    let expected_sha256 = asset
+        .get("digest")
+        .and_then(|value| value.as_str())
+        .and_then(|value| value.strip_prefix("sha256:"))
+        .map(str::to_string);
+
+    Ok((url, expected_sha256))
+}
+
+fn extract_emulator_zip(
+    archive_path: &Path,
+    destination: &Path,
+) -> Result<(), LoaderError> {
+    let file = fs::File::open(archive_path).map_err(|error| {
+        LoaderError::Other(format!(
+            "Emülatör arşivi açılamadı: {error}"
+        ))
+    })?;
+
+    let mut archive = zip::ZipArchive::new(file).map_err(|error| {
+        LoaderError::Other(format!(
+            "Emülatör ZIP arşivi okunamadı: {error}"
+        ))
+    })?;
+
+    fs::create_dir_all(destination).map_err(|error| {
+        LoaderError::Other(format!(
+            "Emülatör geçici klasörü oluşturulamadı: {error}"
+        ))
+    })?;
+
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(|error| {
+            LoaderError::Other(format!(
+                "Emülatör ZIP girdisi okunamadı: {error}"
+            ))
+        })?;
+
+        let relative = entry
+            .enclosed_name()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| {
+                LoaderError::Other(
+                    "Emülatör arşivinde güvensiz dosya yolu bulundu.".into(),
+                )
+            })?;
+
+        let output = destination.join(relative);
+
+        if entry.is_dir() {
+            fs::create_dir_all(&output).map_err(|error| {
+                LoaderError::Other(format!(
+                    "Emülatör klasörü oluşturulamadı: {error}"
+                ))
+            })?;
+            continue;
+        }
+
+        if let Some(parent) = output.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                LoaderError::Other(format!(
+                    "Emülatör alt klasörü oluşturulamadı: {error}"
+                ))
+            })?;
+        }
+
+        let mut target = fs::File::create(&output).map_err(|error| {
+            LoaderError::Other(format!(
+                "Emülatör dosyası oluşturulamadı: {error}"
+            ))
+        })?;
+
+        std::io::copy(&mut entry, &mut target).map_err(|error| {
+            LoaderError::Other(format!(
+                "Emülatör dosyası çıkarılamadı: {error}"
+            ))
+        })?;
+    }
+
+    Ok(())
+}
+
+fn duckstation_executable_in(
+    root: &Path,
+) -> Option<PathBuf> {
+    [
+        "duckstation-qt-x64-ReleaseLTCG.exe",
+        "duckstation-qt.exe",
+        "duckstation.exe",
+    ]
+    .into_iter()
+    .map(|name| root.join(name))
+    .find(|path| emulator_executable_valid(PsPlatform::Ps1, path))
+}
+
+fn install_duckstation_automatically(
+) -> Result<PathBuf, LoaderError> {
+    let client = github_client()?;
+    let (download_url, expected_sha256) =
+        duckstation_latest_asset(&client)?;
+
+    let target = emulator_managed_directory(PsPlatform::Ps1)?;
+    let parent = target.parent().ok_or_else(|| {
+        LoaderError::Other(
+            "Animus emülatör üst klasörü bulunamadı.".into(),
+        )
+    })?;
+
+    let archive_path = parent.join("duckstation-download.zip");
+    let staging = parent.join("duckstation-installing");
+
+    let mut response = client
+        .get(&download_url)
+        .send()
+        .and_then(|response| response.error_for_status())
+        .map_err(|error| {
+            LoaderError::Other(format!(
+                "DuckStation otomatik indirilemedi: {error}"
+            ))
+        })?;
+
+    let mut archive_file = fs::File::create(&archive_path).map_err(|error| {
+        LoaderError::Other(format!(
+            "DuckStation indirme dosyası oluşturulamadı: {error}"
+        ))
+    })?;
+
+    std::io::copy(&mut response, &mut archive_file).map_err(|error| {
+        LoaderError::Other(format!(
+            "DuckStation indirilemedi: {error}"
+        ))
+    })?;
+
+    drop(archive_file);
+
+    if let Some(expected) = expected_sha256 {
+        let actual = crate::storage::hash_file(&archive_path)?;
+
+        if !actual.eq_ignore_ascii_case(&expected) {
+            let _ = fs::remove_file(&archive_path);
+
+            return Err(LoaderError::Other(format!(
+                "DuckStation indirmesi bütünlük kontrolünden geçemedi. Beklenen SHA-256: {expected}, bulunan: {actual}"
+            )));
+        }
+    }
+
+    if staging.exists() {
+        fs::remove_dir_all(&staging).map_err(|error| {
+            LoaderError::Other(format!(
+                "Eski DuckStation geçici klasörü temizlenemedi: {error}"
+            ))
+        })?;
+    }
+
+    extract_emulator_zip(
+        &archive_path,
+        &staging,
+    )?;
+
+    // DuckStation portable mod: ayarlari Animus'un yonettigi emulator
+    // klasorunde tutar; Windows genel kurulumuna ihtiyac duymaz.
+    fs::write(
+        staging.join("portable.txt"),
+        b"",
+    )
+    .map_err(|error| {
+        LoaderError::Other(format!(
+            "DuckStation portable ayarı oluşturulamadı: {error}"
+        ))
+    })?;
+
+    let staged_executable =
+        duckstation_executable_in(&staging)
+            .ok_or_else(|| {
+                LoaderError::Other(
+                    "İndirilen DuckStation paketinde çalıştırılabilir dosya bulunamadı.".into(),
+                )
+            })?;
+
+    let executable_name = staged_executable
+        .file_name()
+        .ok_or_else(|| {
+            LoaderError::Other(
+                "DuckStation çalıştırılabilir dosya adı okunamadı.".into(),
+            )
+        })?
+        .to_os_string();
+
+    if target.exists() {
+        fs::remove_dir_all(&target).map_err(|error| {
+            LoaderError::Other(format!(
+                "Eski DuckStation kurulumu temizlenemedi: {error}"
+            ))
+        })?;
+    }
+
+    fs::rename(
+        &staging,
+        &target,
+    )
+    .map_err(|error| {
+        LoaderError::Other(format!(
+            "DuckStation kurulumu tamamlanamadı: {error}"
+        ))
+    })?;
+
+    let _ = fs::remove_file(&archive_path);
+
+    let executable = target
+        .join(executable_name)
+        .canonicalize()
+        .unwrap_or_else(|_| target.join("duckstation-qt-x64-ReleaseLTCG.exe"));
+
+    if !emulator_executable_valid(
+        PsPlatform::Ps1,
+        &executable,
+    ) {
+        return Err(LoaderError::Other(
+            "DuckStation indirildi ancak çalıştırılabilir dosya doğrulanamadı.".into(),
+        ));
+    }
+
+    save_emulator_path(
+        PsPlatform::Ps1,
+        &executable,
+    )?;
+
+    let _ = logging::event(
+        "info",
+        "emulator",
+        &format!(
+            "DuckStation resmî GitHub paketinden otomatik kuruldu: {}",
+            executable.display()
+        ),
+    );
+
+    Ok(executable)
+}
+
+
+// ============================================================
 // FIND EMULATOR
 // ============================================================
 
@@ -623,13 +965,12 @@ fn find_or_select_emulator(
     app: &AppHandle,
     platform: PsPlatform,
 ) -> Result<PathBuf, LoaderError> {
-    // Daha once otomatik olarak bulunan yol hala gecerliyse kullan.
+    // Daha once bulunan ve halen gecerli olan yolu kullan.
     if let Some(saved) = saved_emulator_path(platform) {
         return Ok(saved);
     }
 
-    // Animus ile paketlenen emulator en basta aranir.
-    // Ardindan sistemde kurulu yaygin konumlara bakilir.
+    // Animus resource klasoru ve sistemde kurulu yaygin konumlari ara.
     for candidate in emulator_candidates(app, platform) {
         if emulator_executable_valid(platform, &candidate) {
             let canonical = candidate
@@ -645,14 +986,17 @@ fn find_or_select_emulator(
         }
     }
 
-    // Burada artik dosya secme penceresi ACILMAZ.
-    Err(LoaderError::Other(format!(
-        "{} Animus kurulumunun içinde bulunamadı.
+    match platform {
+        // PS1 icin artik kullaniciya EXE sectirmiyoruz.
+        // DuckStation resmî GitHub release paketinden otomatik indirilir.
+        PsPlatform::Ps1 => install_duckstation_automatically(),
 
-\
-         Animus installer paketine emulators klasörünün eklendiğinden emin olun.",
-        platform.emulator_name(),
-    )))
+        // PS2 otomatik kurulumunu bir sonraki adimda PCSX2'nin 7z paketine
+        // guvenli extraction ekleyerek tamamlayacagiz.
+        PsPlatform::Ps2 => Err(LoaderError::Other(
+            "PCSX2 bulunamadı. Animus otomatik PCSX2 kurulumu henüz etkin değil.".into(),
+        )),
+    }
 }
 
 
