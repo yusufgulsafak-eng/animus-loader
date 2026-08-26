@@ -1,5 +1,6 @@
 import "./styles.css";
 import "./admin/admin.css";
+import {invoke} from "@tauri-apps/api/core";
 import {api} from "./api/client";
 import {WEB_BASE_URL} from "./config";
 import {patchService} from "./services/patch";
@@ -60,7 +61,7 @@ function registerView(error="",retry=false){
 function shell(){
   const config=state.config||fallbackConfig();document.documentElement.style.setProperty("--accent",config.accent_color||"#b7f34a");
   const subscription=state.user?.subscription;
-  app.innerHTML=`<div class="shell${state.update?" has-update":""}"><header><button class="brand nav-button" data-view="home">${logoMarkup(config)}${escapeHtml(config.app_name)}</button><nav><button class="nav-button active" data-view="home">Ana Sayfa</button><button class="nav-button" data-view="library">Kütüphane</button><button id="backup-nav">Yedekler</button></nav><div class="user"><div><b>${escapeHtml(state.user?.display_name)}</b><small>${state.user?.premium?escapeHtml(subscription?.plan_name||"Premium"):"Ücretsiz"}${subscription?.ends_at?" · "+date(subscription.ends_at):""}</small></div><button id="logout">Çıkış</button></div></header>${state.update?`<div class="update-banner"><b>Yeni loader sürümü hazır: ${escapeHtml(state.update.version)}</b><span>Kurulu sürüm ${escapeHtml(state.update.currentVersion)}</span><button id="update-banner-action">Şimdi Güncelle</button></div>`:""}<main id="main-content"></main><aside class="rightbar"><section class="profile-card"><span>${state.user?.premium?"PREMIUM":"FREE"}</span><b>${escapeHtml(state.user?.display_name)}</b><small>${escapeHtml(state.user?.email)}</small></section><h3>Duyurular</h3><div id="announcements"></div><section class="translation-summary"><h3>Çeviri İlerlemeleri</h3><div id="translation-summary"></div></section><div class="support-card"><span>YARDIMA MI İHTİYACIN VAR?</span><b>Destek merkezine ulaş</b><button id="support-link">Destek →</button><div class="social-links" id="social-links" hidden></div></div><div class="loader-version">Loader v${escapeHtml(state.loaderVersion)}</div></aside></div><div id="modal-root"></div><div id="dev-panel"></div>`;
+  app.innerHTML=`<div class="shell${state.update?" has-update":""}"><header><button class="brand nav-button" data-view="home">${logoMarkup(config)}${escapeHtml(config.app_name)}</button><nav><button class="nav-button active" data-view="home">Ana Sayfa</button><button class="nav-button" data-view="library">Kütüphane</button><button id="backup-nav">Yedekler</button><button class="nav-button" data-view="emulator">PS Oyun Emülatör</button></nav><div class="user"><div><b>${escapeHtml(state.user?.display_name)}</b><small>${state.user?.premium?escapeHtml(subscription?.plan_name||"Premium"):"Ücretsiz"}${subscription?.ends_at?" · "+date(subscription.ends_at):""}</small></div><button id="logout">Çıkış</button></div></header>${state.update?`<div class="update-banner"><b>Yeni loader sürümü hazır: ${escapeHtml(state.update.version)}</b><span>Kurulu sürüm ${escapeHtml(state.update.currentVersion)}</span><button id="update-banner-action">Şimdi Güncelle</button></div>`:""}<main id="main-content"></main><aside class="rightbar"><section class="profile-card"><span>${state.user?.premium?"PREMIUM":"FREE"}</span><b>${escapeHtml(state.user?.display_name)}</b><small>${escapeHtml(state.user?.email)}</small></section><h3>Duyurular</h3><div id="announcements"></div><section class="translation-summary"><h3>Çeviri İlerlemeleri</h3><div id="translation-summary"></div></section><div class="support-card"><span>YARDIMA MI İHTİYACIN VAR?</span><b>Destek merkezine ulaş</b><button id="support-link">Destek →</button><div class="social-links" id="social-links" hidden></div></div><div class="loader-version">Loader v${escapeHtml(state.loaderVersion)}</div></aside></div><div id="modal-root"></div><div id="dev-panel"></div>`;
   if(canManage(state.user)){const button=document.createElement("button");button.className="nav-button";button.dataset.view="admin";button.textContent="Yönetim";document.querySelector(".shell nav")?.append(button)}
   mountBackgroundMedia(document.querySelector<HTMLElement>(".shell")!,config.branding?.library_background,asset,55);
   document.querySelector("#logout")!.addEventListener("click",async()=>{try{await api.logout()}catch{}state.user=null;state.selected=null;installations.clear();loginView()});
@@ -86,6 +87,7 @@ function developerShortcut(event:KeyboardEvent){if(event.ctrlKey&&event.shiftKey
 function setActiveNav(view:string){document.querySelectorAll<HTMLButtonElement>(".nav-button").forEach(button=>button.classList.toggle("active",button.dataset.view===view))}
 function showView(view:string){
   if(view==="admin"&&canManage(state.user)){currentView="admin";setActiveNav(currentView);void renderAdminPanel(document.querySelector<HTMLElement>("#main-content")!,async()=>{state.games=await api.games();cache.saveGames(state.games);await loadConfig()},notify);return}
+  if(view==="emulator"){currentView="emulator";setActiveNav(currentView);renderEmulator();return}
   currentView=view==="library"?"library":"home";setActiveNav(currentView);currentView==="library"?renderLibrary():renderHome();
 }
 
@@ -95,6 +97,89 @@ function renderHome(){
   document.querySelector("#main-content")!.innerHTML=`<section class="hero launcher-hero" style="background-image:linear-gradient(90deg,#09070df2,#15101bbb),url('${escapeHtml(background)}')"><div><span class="overline">ANIMUS KÜTÜPHANESİ</span><h1>${escapeHtml(featured?.title||config.library_title)}</h1><p>Yeni oyunlar ve yayınlanan Türkçe yamalar loader yeniden derlenmeden burada görünür.</p><div class="hero-actions"><button id="browse">Kütüphaneyi Aç</button><button class="ghost" id="refresh">Kataloğu Yenile</button></div></div></section><section class="home-section"><div class="section-title"><h2>Yeni Eklenen Yamalar</h2><button data-library>Hepsini Gör</button></div><div class="horizontal-games">${gameCards(recent)}</div></section><section class="home-section"><div class="section-title"><h2>Son Güncellenenler</h2></div><div class="horizontal-games">${gameCards(recent)}</div></section><section class="home-section"><div class="section-title"><h2>Popüler Oyunlar</h2></div><div class="horizontal-games">${gameCards(popular)}</div></section>`;
   document.querySelector("#browse")!.addEventListener("click",()=>showView("library"));document.querySelectorAll("[data-library]").forEach(b=>b.addEventListener("click",()=>showView("library")));
   document.querySelector("#refresh")!.addEventListener("click",()=>loadGames(true));bindGameCards();
+}
+
+
+type PsPlatform="ps1"|"ps2";
+
+const psGames=[
+  {
+    key:"silent-hill-1",
+    platform:"ps1" as PsPlatform,
+    platformLabel:"PlayStation 1",
+    title:"Silent Hill",
+    description:"Silent Hill PS1 oyununu DuckStation üzerinden başlat.",
+    match:(game:Game)=>/^silent hill(?: 1)?$/i.test(game.name.trim())
+  },
+  {
+    key:"resident-evil-code-veronica",
+    platform:"ps2" as PsPlatform,
+    platformLabel:"PlayStation 2",
+    title:"Resident Evil Code: Veronica",
+    description:"Resident Evil Code: Veronica PS2 oyununu PCSX2 üzerinden başlat.",
+    match:(game:Game)=>/resident evil.*code[: ]?\s*veronica/i.test(game.name)
+  }
+];
+
+function psGamePath(key:string){return localStorage.getItem("ps_game_"+key)||""}
+function compactPath(value:string){if(!value)return "Oyun dosyası seçilmedi";return value.length>54?"…"+value.slice(-53):value}
+
+function renderEmulator(){
+  const cards=psGames.map(item=>{
+    const game=state.games.find(item.match);
+    const image=game?cover(game):asset("/assets/placeholders/cover-generic.svg");
+    const savedPath=psGamePath(item.key);
+    return `<article class="game-card emulator-game-card">
+      <div class="cover" style="background-image:url('${escapeHtml(image)}')">
+        <span class="access free">${escapeHtml(item.platformLabel)}</span>
+        <span class="install-badge ${savedPath?"installed":""}">${savedPath?"HAZIR":"DOSYA SEÇ"}</span>
+      </div>
+      <h3>${escapeHtml(game?.name||item.title)}</h3>
+      <div class="meta"><span>${escapeHtml(item.description)}</span><b>${item.platform.toUpperCase()}</b></div>
+      <div style="margin-top:10px;min-height:34px"><small title="${escapeHtml(savedPath)}">${escapeHtml(compactPath(savedPath))}</small></div>
+      <div class="detail-actions" style="margin-top:12px">
+        <button class="ghost ps-select" data-key="${escapeHtml(item.key)}" data-platform="${item.platform}">OYUN DOSYASINI SEÇ</button>
+        <button class="ps-play" data-key="${escapeHtml(item.key)}" data-platform="${item.platform}" ${savedPath?"":"disabled"}>OYNA</button>
+      </div>
+    </article>`;
+  }).join("");
+
+  document.querySelector("#main-content")!.innerHTML=`<section class="catalog full-library">
+    <div class="catalog-head">
+      <div>
+        <span class="overline">ANIMUS EMU</span>
+        <h1>PS Oyun Emülatör</h1>
+        <p class="muted">Kendi oyun yedeğini seç. PS1 oyunları DuckStation, PS2 oyunları PCSX2 ile Animus üzerinden başlatılır.</p>
+      </div>
+    </div>
+    <div class="game-grid">${cards}</div>
+  </section>`;
+
+  document.querySelectorAll<HTMLButtonElement>(".ps-select").forEach(button=>button.onclick=()=>void selectPsGame(button.dataset.platform as PsPlatform,button.dataset.key!));
+  document.querySelectorAll<HTMLButtonElement>(".ps-play").forEach(button=>button.onclick=()=>void launchPsGame(button.dataset.platform as PsPlatform,button.dataset.key!));
+}
+
+async function selectPsGame(platform:PsPlatform,key:string){
+  try{
+    const selected=await invoke<string|null>("select_ps_game_file",{platform});
+    if(!selected)return;
+    localStorage.setItem("ps_game_"+key,selected);
+    renderEmulator();
+    notify("Oyun dosyası kaydedildi.");
+  }catch(error){
+    notify("Oyun dosyası seçilemedi: "+(error instanceof Error?error.message:String(error)),true);
+  }
+}
+
+async function launchPsGame(platform:PsPlatform,key:string){
+  const gamePath=psGamePath(key);
+  if(!gamePath){notify("Önce oyun dosyasını seç.",true);return}
+  try{
+    await invoke("launch_ps_game",{platform,gamePath});
+    notify("Oyun başlatılıyor…");
+  }catch(error){
+    notify("Emülatör başlatılamadı: "+(error instanceof Error?error.message:String(error)),true);
+  }
 }
 
 function renderLibrary(){
