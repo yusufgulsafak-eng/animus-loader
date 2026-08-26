@@ -663,7 +663,7 @@ fn github_client() -> Result<reqwest::blocking::Client, LoaderError> {
 fn duckstation_latest_asset(
     client: &reqwest::blocking::Client,
 ) -> Result<(String, Option<String>), LoaderError> {
-    let release: serde_json::Value = client
+    let response = client
         .get(DUCKSTATION_RELEASE_API)
         .header("Accept", "application/vnd.github+json")
         .send()
@@ -672,11 +672,18 @@ fn duckstation_latest_asset(
             LoaderError::Other(format!(
                 "DuckStation sürüm bilgisi alınamadı: {error}"
             ))
-        })?
-        .json()
-        .map_err(|error| {
+        })?;
+
+    let body = response.text().map_err(|error| {
+        LoaderError::Other(format!(
+            "DuckStation sürüm yanıtı okunamadı: {error}"
+        ))
+    })?;
+
+    let release: serde_json::Value =
+        serde_json::from_str(&body).map_err(|error| {
             LoaderError::Other(format!(
-                "DuckStation sürüm bilgisi okunamadı: {error}"
+                "DuckStation sürüm bilgisi JSON olarak çözümlenemedi: {error}"
             ))
         })?;
 
@@ -756,7 +763,6 @@ fn extract_emulator_zip(
 
         let relative = entry
             .enclosed_name()
-            .map(Path::to_path_buf)
             .ok_or_else(|| {
                 LoaderError::Other(
                     "Emülatör arşivinde güvensiz dosya yolu bulundu.".into(),
