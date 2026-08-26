@@ -22,7 +22,7 @@ use std::{
     process::Command,
 };
 
-use tauri::{AppHandle, Manager};
+use tauri::{path::BaseDirectory, AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
 use walkdir::WalkDir;
 
@@ -969,6 +969,9 @@ fn install_duckstation_automatically(
 // ============================================================
 
 const PS1_BIOS_SIZE: u64 = 0x80000;
+const PS1_OPENBIOS_SHA256: &str =
+    "fabe498fbf224e4721f12f31b6f5fe0659205e341dc4e5c5f91b9bd1a1011c57";
+
 
 fn duckstation_portable_bios_directory(
     emulator: &Path,
@@ -1002,6 +1005,102 @@ fn duckstation_portable_bios_available(
         .filter_map(Result::ok)
         .filter_map(|entry| entry.metadata().ok())
         .any(|metadata| metadata.is_file() && metadata.len() == PS1_BIOS_SIZE)
+}
+
+/// Animus installer'ına dahil edilen MIT lisanslı PCSX-Redux OpenBIOS'u
+/// Animus'un portable DuckStation/bios klasörüne ilk kullanımda kopyalar.
+/// Retail Sony BIOS'u değildir; yasal olarak redistributable OpenBIOS'tur.
+fn ensure_bundled_ps1_openbios(
+    app: &AppHandle,
+    emulator: &Path,
+) -> Result<(), LoaderError> {
+    if duckstation_portable_bios_available(emulator) {
+        return Ok(());
+    }
+
+    let bios_directory =
+        duckstation_portable_bios_directory(emulator)
+            .ok_or_else(|| {
+                LoaderError::Other(
+                    "Animus DuckStation portable BIOS klasörü çözülemedi."
+                        .into(),
+                )
+            })?;
+
+    fs::create_dir_all(&bios_directory).map_err(|error| {
+        LoaderError::Other(format!(
+            "DuckStation BIOS klasörü oluşturulamadı: {error}"
+        ))
+    })?;
+
+    let bundled = app
+        .path()
+        .resolve(
+            "bios/ps1/openbios.bin",
+            BaseDirectory::Resource,
+        )
+        .map_err(|error| {
+            LoaderError::Other(format!(
+                "Animus dahili OpenBIOS kaynağı çözülemedi: {error}"
+            ))
+        })?;
+
+    if !bundled.is_file() {
+        return Err(LoaderError::Other(
+            "Animus dahili PS1 OpenBIOS dosyası bulunamadı. Release paketi eksik oluşturulmuş."
+                .into(),
+        ));
+    }
+
+    let metadata = fs::metadata(&bundled).map_err(|error| {
+        LoaderError::Other(format!(
+            "Animus OpenBIOS dosyası okunamadı: {error}"
+        ))
+    })?;
+
+    if metadata.len() != PS1_BIOS_SIZE {
+        return Err(LoaderError::Integrity(format!(
+            "Animus OpenBIOS boyutu geçersiz. Beklenen: {PS1_BIOS_SIZE} bayt, bulunan: {} bayt",
+            metadata.len()
+        )));
+    }
+
+    let actual = crate::storage::hash_file(&bundled)?;
+
+    if !actual.eq_ignore_ascii_case(PS1_OPENBIOS_SHA256) {
+        return Err(LoaderError::Integrity(format!(
+            "Animus OpenBIOS SHA-256 doğrulaması başarısız. Beklenen: {PS1_OPENBIOS_SHA256}, bulunan: {actual}"
+        )));
+    }
+
+    let destination = bios_directory.join("openbios.bin");
+
+    fs::copy(&bundled, &destination).map_err(|error| {
+        LoaderError::Other(format!(
+            "OpenBIOS DuckStation klasörüne kopyalanamadı: {error}"
+        ))
+    })?;
+
+    // Lisans bildirimi de dağıtımın yanında tutulur.
+    if let Ok(license) = app.path().resolve(
+        "bios/ps1/OpenBIOS.LICENSE",
+        BaseDirectory::Resource,
+    ) {
+        if license.is_file() {
+            let _ = fs::copy(
+                license,
+                bios_directory.join("OpenBIOS.LICENSE"),
+            );
+        }
+    }
+
+    let _ = logging::event(
+        "info",
+        "emulator",
+        "MIT lisanslı PCSX-Redux OpenBIOS Animus DuckStation BIOS klasörüne hazırlandı",
+    );
+
+    Ok(())
 }
 
 /// Kullanıcının kendi PS1 cihazından dump ettiği BIOS'u seçer ve
@@ -1585,13 +1684,18 @@ async fn launch_installed_ps_game(
         platform,
     )?;
 
-    if platform == PsPlatform::Ps1
-        && !duckstation_portable_bios_available(&emulator)
-    {
-        return Err(LoaderError::Other(
-            "PS1 BIOS bulunamadı. Animus içindeki BIOS EKLE düğmesinden kendi PlayStation 1 cihazından dump ettiğin 512 KiB BIOS dosyasını ekle."
-                .into(),
-        ));
+    if platform == PsPlatform::Ps1 {
+        ensure_bundled_ps1_openbios(
+            &app,
+            &emulator,
+        )?;
+
+        if !duckstation_portable_bios_available(&emulator) {
+            return Err(LoaderError::Other(
+                "Animus PS1 OpenBIOS hazırlanamadı. İstersen KENDİ BIOSUNU EKLE düğmesiyle kendi 512 KiB PS1 BIOS dump'ını kullanabilirsin."
+                    .into(),
+            ));
+        }
     }
 
     if platform == PsPlatform::Ps2
