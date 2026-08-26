@@ -24,6 +24,7 @@ use std::{
 
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
+use walkdir::WalkDir;
 
 
 // ============================================================
@@ -735,6 +736,158 @@ async fn launch_ps_game(
 
 
 // ============================================================
+// FIND PS IMAGE INSIDE INSTALLED ANIMUS PACKAGE
+// ============================================================
+
+fn find_installed_ps_game_image(
+    game_root: &Path,
+    platform: PsPlatform,
+) -> Result<PathBuf, LoaderError> {
+    if !game_root.is_dir() {
+        return Err(LoaderError::Other(
+            "Kurulu PlayStation oyun klasörü bulunamadı.".into(),
+        ));
+    }
+
+    let root = game_root.canonicalize().map_err(|error| {
+        LoaderError::Other(format!(
+            "PlayStation oyun klasörü okunamadı: {error}"
+        ))
+    })?;
+
+    // Sıra önemli:
+    // PS1'de CUE varsa BIN yerine CUE açılır.
+    // PS2'de ISO/CHD önceliklidir.
+    let preferred: &[&str] = match platform {
+        PsPlatform::Ps1 => &[
+            "cue",
+            "chd",
+            "pbp",
+            "iso",
+            "img",
+            "mdf",
+            "bin",
+        ],
+        PsPlatform::Ps2 => &[
+            "iso",
+            "chd",
+            "cso",
+            "cue",
+            "bin",
+        ],
+    };
+
+    for extension in preferred {
+        for entry in WalkDir::new(&root)
+            .follow_links(false)
+            .max_depth(10)
+            .into_iter()
+            .filter_map(Result::ok)
+        {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+
+            let path = entry.path();
+
+            let current_extension = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+
+            if current_extension != *extension {
+                continue;
+            }
+
+            let canonical = path.canonicalize().map_err(|error| {
+                LoaderError::Other(format!(
+                    "PlayStation oyun imajı okunamadı: {error}"
+                ))
+            })?;
+
+            // Symlink/junction ile kurulum klasörünün dışına kaçılmasına izin verme.
+            if !canonical.starts_with(&root) {
+                continue;
+            }
+
+            return Ok(canonical);
+        }
+    }
+
+    Err(LoaderError::Other(match platform {
+        PsPlatform::Ps1 => {
+            "Kurulan paketin içinde PS1 oyun dosyası bulunamadı. CUE/CHD/PBP/ISO/BIN aranmıştır."
+                .into()
+        }
+        PsPlatform::Ps2 => {
+            "Kurulan paketin içinde PS2 oyun dosyası bulunamadı. ISO/CHD/CSO/CUE/BIN aranmıştır."
+                .into()
+        }
+    }))
+}
+
+
+/// Kullanıcıdan ISO seçmez.
+/// MediaFire paketinin Animus tarafından kurulduğu klasörü tarar ve
+/// bulunan oyun imajını uygun emülatör ile çalıştırır.
+#[tauri::command(rename_all = "camelCase")]
+async fn launch_installed_ps_game(
+    app: AppHandle,
+    platform: String,
+    game_root: String,
+) -> Result<String, LoaderError> {
+    let platform = PsPlatform::parse(&platform)?;
+
+    let image = find_installed_ps_game_image(
+        &PathBuf::from(game_root),
+        platform,
+    )?;
+
+    let emulator = find_or_select_emulator(
+        &app,
+        platform,
+    )?;
+
+    let mut command = Command::new(&emulator);
+
+    if let Some(parent) = emulator.parent() {
+        command.current_dir(parent);
+    }
+
+    command
+        .arg("-batch")
+        .arg("-fullscreen")
+        .arg(&image);
+
+    command.spawn().map_err(|error| {
+        LoaderError::Other(format!(
+            "{} başlatılamadı: {error}",
+            platform.emulator_name()
+        ))
+    })?;
+
+    let game_name = image
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("PlayStation oyunu")
+        .to_string();
+
+    let _ = logging::event(
+        "info",
+        "emulator",
+        &format!(
+            "{} kurulu Animus paketinden başlatıldı: {}",
+            platform.label(),
+            game_name
+        ),
+    );
+
+    Ok(game_name)
+}
+
+
+// ============================================================
 // GAME ROOT
 // ============================================================
 
@@ -1132,7 +1285,8 @@ pub fn run() {
 
                 // Animus Emu
                 select_ps_game_file,
-                launch_ps_game
+                launch_ps_game,
+                launch_installed_ps_game
             ]
         )
         .run(
