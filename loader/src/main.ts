@@ -473,7 +473,7 @@ async function installPsBios(platform:PsPlatform){
     const command=platform==="ps1"?"install_ps1_bios":"install_ps2_bios";
     const path=await invoke<string|null>(command);
     if(!path)return;
-    notify(`${platform==="ps1"?"PS1":"PS2"} BIOS eklendi. Artık oyunu başlatabilirsin.`);
+    notify(platform==="ps1"?"Kendi PS1 BIOS'un eklendi. Animus artık bunu kullanabilir.":"PS2 BIOS eklendi. Artık oyunu başlatabilirsin.");
   }catch(error){
     notify("BIOS eklenemedi: "+(error instanceof Error?error.message:String(error)),true);
   }
@@ -498,7 +498,7 @@ function renderEmulator(){
     const update=installations.hasUpdate(game.id,game.patch_version);
     const noPatch=!game.patch_version_id;
     const status=update?"GÜNCELLEME VAR":installed?"OYNAMAYA HAZIR":game.patch_version?"OYUNU HAZIRLA":"PAKET BEKLENİYOR";
-    const biosButton=`<button class="ghost ps-bios-add" data-id="${game.id}" data-platform="${item.platform}">BIOS EKLE</button>`;
+    const biosButton=`<button class="ghost ps-bios-add" data-id="${game.id}" data-platform="${item.platform}">${item.platform==="ps1"?"KENDİ BIOSUNU EKLE":"BIOS EKLE"}</button>`;
 
     return `<article class="game-card emulator-game-card">
       <div class="cover" style="background-image:url('${escapeHtml(cover(game))}')">
@@ -604,14 +604,14 @@ async function showGame(summary:Game){
   const blocked=!meetsMinimum(state.loaderVersion,game.minimum_loader_version);
 
   const pathSection=ps
-    ? `<div class="patch-unavailable" style="border-color:transparent;background:rgba(183,243,74,.06)">Oyun imajı MediaFire paketinden Animus tarafından otomatik hazırlanır. Oyun klasörü veya ISO/CUE/CHD seçmen gerekmez. ${ps.platformLabel} BIOS dosyanı bir kez BIOS EKLE ile tanımlaman gerekir.</div>`
+    ? `<div class="patch-unavailable" style="border-color:transparent;background:rgba(183,243,74,.06)">Oyun imajı MediaFire paketinden Animus tarafından otomatik hazırlanır. Oyun klasörü veya ISO/CUE/CHD seçmen gerekmez. ${ps.platform==="ps1"?"PS1 için MIT lisanslı OpenBIOS Animus ile dahili gelir; BIOS seçmek zorunda değilsin. İstersen kendi PS1 BIOS dump'ını kullanabilirsin.":"PlayStation 2 BIOS dosyanı bir kez BIOS EKLE ile tanımlaman gerekir."}</div>`
     : `<label class="path-row">Oyun dizini<input id="game-root" readonly value="${escapeHtml(rootPath||"Otomatik bulunacak / manuel seçilebilir")}"><button id="select-root">OYUN KLASÖRÜNÜ SEÇ</button></label>`;
 
   const actions=ps
     ? (
         installed
-          ? `<div class="detail-actions"><button id="ps-play-action">OYNA</button><button class="ghost" id="ps-bios-action">BIOS EKLE</button>${update?`<button class="ghost" id="install-action" ${noPatch||blocked?"disabled":""}>OYUNU GÜNCELLE</button>`:""}<button class="ghost" id="verify-action">DOSYALARI DOĞRULA</button><button class="danger" id="uninstall-action" ${record?"":"disabled"}>OYUNU KALDIR</button></div>`
-          : `<div class="detail-actions"><button id="install-action" ${noPatch||blocked?"disabled":""}>OYUNU HAZIRLA</button><button class="ghost" id="ps-bios-action">BIOS EKLE</button></div>`
+          ? `<div class="detail-actions"><button id="ps-play-action">OYNA</button><button class="ghost" id="ps-bios-action">${ps.platform==="ps1"?"KENDİ BIOSUNU EKLE":"BIOS EKLE"}</button>${update?`<button class="ghost" id="install-action" ${noPatch||blocked?"disabled":""}>OYUNU GÜNCELLE</button>`:""}<button class="ghost" id="verify-action">DOSYALARI DOĞRULA</button><button class="danger" id="uninstall-action" ${record?"":"disabled"}>OYUNU KALDIR</button></div>`
+          : `<div class="detail-actions"><button id="install-action" ${noPatch||blocked?"disabled":""}>OYUNU HAZIRLA</button><button class="ghost" id="ps-bios-action">${ps.platform==="ps1"?"KENDİ BIOSUNU EKLE":"BIOS EKLE"}</button></div>`
       )
     : `<div class="detail-actions"><button id="install-action" ${noPatch||blocked?"disabled":""}>${update?"YAMAYI GÜNCELLE":"YAMAYI KUR"}</button><button class="ghost" id="verify-action" ${installed?"":"disabled"}>DOSYALARI DOĞRULA</button><button class="danger" id="uninstall-action" ${record?"":"disabled"}>YAMAYI KALDIR</button></div>`;
 
