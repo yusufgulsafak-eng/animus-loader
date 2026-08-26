@@ -332,9 +332,67 @@ fn push_candidate(
 // ============================================================
 
 fn emulator_candidates(
+    app: &AppHandle,
     platform: PsPlatform,
 ) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
+
+    // --------------------------------------------------------
+    // 0. Animus installer ile birlikte gelen emulator dosyalari
+    // --------------------------------------------------------
+    //
+    // Tauri resource_dir Windows'ta ana .exe'nin bulundugu dizindir.
+    // tauri.conf.json icinde emulators klasoru resource olarak paketlenince
+    // OYNA tusu hicbir dosya secme penceresi acmadan buradaki emulatoru kullanir.
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        match platform {
+            PsPlatform::Ps1 => {
+                candidates.push(
+                    resource_dir
+                        .join("emulators")
+                        .join("duckstation")
+                        .join("duckstation-qt-x64-ReleaseLTCG.exe"),
+                );
+
+                candidates.push(
+                    resource_dir
+                        .join("emulators")
+                        .join("duckstation")
+                        .join("duckstation-qt.exe"),
+                );
+
+                candidates.push(
+                    resource_dir
+                        .join("emulators")
+                        .join("duckstation")
+                        .join("duckstation.exe"),
+                );
+            }
+
+            PsPlatform::Ps2 => {
+                candidates.push(
+                    resource_dir
+                        .join("emulators")
+                        .join("pcsx2")
+                        .join("pcsx2-qt.exe"),
+                );
+
+                candidates.push(
+                    resource_dir
+                        .join("emulators")
+                        .join("pcsx2")
+                        .join("pcsx2-qtx64-avx2.exe"),
+                );
+
+                candidates.push(
+                    resource_dir
+                        .join("emulators")
+                        .join("pcsx2")
+                        .join("pcsx2.exe"),
+                );
+            }
+        }
+    }
 
     // --------------------------------------------------------
     // 1. Environment override
@@ -558,54 +616,6 @@ fn emulator_candidates(
 
 
 // ============================================================
-// MANUAL EMULATOR SELECTOR
-// ============================================================
-
-fn manually_select_emulator(
-    app: &AppHandle,
-    platform: PsPlatform,
-) -> Result<Option<PathBuf>, LoaderError> {
-    let selected = app
-        .dialog()
-        .file()
-        .add_filter(
-            platform.emulator_name(),
-            &["exe"],
-        )
-        .blocking_pick_file();
-
-    let Some(selected) = selected else {
-        return Ok(None);
-    };
-
-    let path = selected.into_path().map_err(|error| {
-        LoaderError::Other(format!(
-            "Emülatör dosyasının yolu okunamadı: {error}"
-        ))
-    })?;
-
-    if !emulator_executable_valid(platform, &path) {
-        return Err(LoaderError::Other(format!(
-            "Seçilen dosya {} çalıştırılabilir dosyası gibi görünmüyor.\n\n\
-             Lütfen doğru {} .exe dosyasını seç.",
-            platform.emulator_name(),
-            platform.emulator_name(),
-        )));
-    }
-
-    let canonical = path.canonicalize().map_err(|error| {
-        LoaderError::Other(format!(
-            "Emülatör yolu çözümlenemedi: {error}"
-        ))
-    })?;
-
-    save_emulator_path(platform, &canonical)?;
-
-    Ok(Some(canonical))
-}
-
-
-// ============================================================
 // FIND EMULATOR
 // ============================================================
 
@@ -613,19 +623,14 @@ fn find_or_select_emulator(
     app: &AppHandle,
     platform: PsPlatform,
 ) -> Result<PathBuf, LoaderError> {
-    // --------------------------------------------------------
-    // Previously selected emulator
-    // --------------------------------------------------------
-
+    // Daha once otomatik olarak bulunan yol hala gecerliyse kullan.
     if let Some(saved) = saved_emulator_path(platform) {
         return Ok(saved);
     }
 
-    // --------------------------------------------------------
-    // Automatic search
-    // --------------------------------------------------------
-
-    for candidate in emulator_candidates(platform) {
+    // Animus ile paketlenen emulator en basta aranir.
+    // Ardindan sistemde kurulu yaygin konumlara bakilir.
+    for candidate in emulator_candidates(app, platform) {
         if emulator_executable_valid(platform, &candidate) {
             let canonical = candidate
                 .canonicalize()
@@ -640,24 +645,12 @@ fn find_or_select_emulator(
         }
     }
 
-    // --------------------------------------------------------
-    // Ask user
-    // --------------------------------------------------------
-
-    let selected = manually_select_emulator(
-        app,
-        platform,
-    )?;
-
-    if let Some(selected) = selected {
-        return Ok(selected);
-    }
-
+    // Burada artik dosya secme penceresi ACILMAZ.
     Err(LoaderError::Other(format!(
-        "{} bulunamadı.\n\n\
-         {} kuruluysa .exe dosyasını seçebilirsin.\n\
-         Emülatör kurulmamışsa önce kurulum yapılması gerekiyor.",
-        platform.emulator_name(),
+        "{} Animus kurulumunun içinde bulunamadı.
+
+\
+         Animus installer paketine emulators klasörünün eklendiğinden emin olun.",
         platform.emulator_name(),
     )))
 }
