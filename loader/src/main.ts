@@ -1,4 +1,5 @@
 import "./styles.css";
+import "./community.css";
 import "./admin/admin.css";
 import {invoke} from "@tauri-apps/api/core";
 import {api} from "./api/client";
@@ -17,12 +18,20 @@ import type {Game,LoaderConfig,OperationProgress} from "./types";
 
 const app=document.querySelector<HTMLDivElement>("#app")!;
 let currentView="home";
+let chatPollTimer:number|undefined;
+let chatRefreshRunning=false;
 const escapeHtml=(value:unknown)=>String(value??"").replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]!));
 const asset=(path?:string|null)=>!path?"":(/^https?:\/\//i.test(path)?path:WEB_BASE_URL+(path.startsWith("/")?path:"/"+path));
 const cover=(game:Game)=>asset(game.local_cover_path||game.cover_url||game.cover_path)||asset("/assets/placeholders/cover-generic.svg");
 const banner=(game:Game)=>asset(game.local_banner_path||game.banner_url||game.banner_path)||asset("/assets/placeholders/banner-generic.svg");
 const size=(bytes?:number|null)=>bytes?new Intl.NumberFormat("tr-TR",{style:"unit",unit:"megabyte",maximumFractionDigits:1}).format(bytes/1048576):"—";
 const date=(value?:string|null)=>value?new Intl.DateTimeFormat("tr-TR",{dateStyle:"medium"}).format(new Date(value)):"—";
+const dateTime=(value?:string|null)=>{
+  if(!value)return "—";
+  const normalized=/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)?value.replace(" ","T")+"Z":value;
+  const parsed=new Date(normalized);
+  return Number.isNaN(parsed.getTime())?value:new Intl.DateTimeFormat("tr-TR",{dateStyle:"short",timeStyle:"short"}).format(parsed);
+};
 const logoMarkup=(config:LoaderConfig,className="brand-logo")=>config.logo_url
   ? `<span class="${className} has-image"><img src="${escapeHtml(asset(config.logo_url))}" alt="" onerror="this.parentElement?.classList.remove('has-image');this.remove()"><b>A</b></span>`
   : `<span class="${className}"><b>A</b></span>`;
@@ -61,10 +70,10 @@ function registerView(error="",retry=false){
 function shell(){
   const config=state.config||fallbackConfig();document.documentElement.style.setProperty("--accent",config.accent_color||"#b7f34a");
   const subscription=state.user?.subscription;
-  app.innerHTML=`<div class="shell${state.update?" has-update":""}"><header><button class="brand nav-button" data-view="home">${logoMarkup(config)}${escapeHtml(config.app_name)}</button><nav><button class="nav-button active" data-view="home">Ana Sayfa</button><button class="nav-button" data-view="library">Kütüphane</button><button id="backup-nav">Yedekler</button><button class="nav-button" data-view="emulator">PS Oyun Emülatör</button></nav><div class="user"><div><b>${escapeHtml(state.user?.display_name)}</b><small>${state.user?.premium?escapeHtml(subscription?.plan_name||"Premium"):"Ücretsiz"}${subscription?.ends_at?" · "+date(subscription.ends_at):""}</small></div><button id="logout">Çıkış</button></div></header>${state.update?`<div class="update-banner"><b>Yeni loader sürümü hazır: ${escapeHtml(state.update.version)}</b><span>Kurulu sürüm ${escapeHtml(state.update.currentVersion)}</span><button id="update-banner-action">Şimdi Güncelle</button></div>`:""}<main id="main-content"></main><aside class="rightbar"><section class="profile-card"><span>${state.user?.premium?"PREMIUM":"FREE"}</span><b>${escapeHtml(state.user?.display_name)}</b><small>${escapeHtml(state.user?.email)}</small></section><h3>Duyurular</h3><div id="announcements"></div><section class="translation-summary"><h3>Çeviri İlerlemeleri</h3><div id="translation-summary"></div></section><div class="support-card"><span>YARDIMA MI İHTİYACIN VAR?</span><b>Destek merkezine ulaş</b><button id="support-link">Destek →</button><div class="social-links" id="social-links" hidden></div></div><div class="loader-version">Loader v${escapeHtml(state.loaderVersion)}</div></aside></div><div id="modal-root"></div><div id="dev-panel"></div>`;
+  app.innerHTML=`<div class="shell${state.update?" has-update":""}"><header><button class="brand nav-button" data-view="home">${logoMarkup(config)}${escapeHtml(config.app_name)}</button><nav><button class="nav-button active" data-view="home">Ana Sayfa</button><button class="nav-button" data-view="library">Kütüphane</button><button id="backup-nav">Yedekler</button><button class="nav-button" data-view="emulator">PS Oyun Emülatör</button><button class="nav-button" data-view="announcements">Duyurular</button><button class="nav-button" data-view="chat">Canlı Chat</button></nav><div class="user"><div><b>${escapeHtml(state.user?.display_name)}</b><small>${state.user?.premium?escapeHtml(subscription?.plan_name||"Premium"):"Ücretsiz"}${subscription?.ends_at?" · "+date(subscription.ends_at):""}</small></div><button id="logout">Çıkış</button></div></header>${state.update?`<div class="update-banner"><b>Yeni loader sürümü hazır: ${escapeHtml(state.update.version)}</b><span>Kurulu sürüm ${escapeHtml(state.update.currentVersion)}</span><button id="update-banner-action">Şimdi Güncelle</button></div>`:""}<main id="main-content"></main><aside class="rightbar"><section class="profile-card"><span>${state.user?.premium?"PREMIUM":"FREE"}</span><b>${escapeHtml(state.user?.display_name)}</b><small>${escapeHtml(state.user?.email)}</small></section><h3>Duyurular</h3><div id="announcements"></div><section class="translation-summary"><h3>Çeviri İlerlemeleri</h3><div id="translation-summary"></div></section><div class="support-card"><span>YARDIMA MI İHTİYACIN VAR?</span><b>Destek merkezine ulaş</b><button id="support-link">Destek →</button><div class="social-links" id="social-links" hidden></div></div><div class="loader-version">Loader v${escapeHtml(state.loaderVersion)}</div></aside></div><div id="modal-root"></div><div id="dev-panel"></div>`;
   if(canManage(state.user)){const button=document.createElement("button");button.className="nav-button";button.dataset.view="admin";button.textContent="Yönetim";document.querySelector(".shell nav")?.append(button)}
   mountBackgroundMedia(document.querySelector<HTMLElement>(".shell")!,config.branding?.library_background,asset,55);
-  document.querySelector("#logout")!.addEventListener("click",async()=>{try{await api.logout()}catch{}state.user=null;state.selected=null;installations.clear();loginView()});
+  document.querySelector("#logout")!.addEventListener("click",async()=>{stopChatPolling();try{await api.logout()}catch{}state.user=null;state.selected=null;installations.clear();loginView()});
   document.querySelector("#backup-nav")!.addEventListener("click",showBackups);
   document.querySelector("#support-link")!.addEventListener("click",()=>void openLink(config.support_url,"Destek bağlantısı henüz tanımlanmadı."));
   const social=document.querySelector<HTMLElement>("#social-links");
@@ -85,10 +94,130 @@ function shell(){
 
 function developerShortcut(event:KeyboardEvent){if(event.ctrlKey&&event.shiftKey&&event.key.toLowerCase()==="d"){state.developer=!state.developer;renderDeveloper()}}
 function setActiveNav(view:string){document.querySelectorAll<HTMLButtonElement>(".nav-button").forEach(button=>button.classList.toggle("active",button.dataset.view===view))}
+function stopChatPolling(){
+  if(chatPollTimer!==undefined){window.clearInterval(chatPollTimer);chatPollTimer=undefined}
+  chatRefreshRunning=false;
+}
+
 function showView(view:string){
+  if(view!=="chat")stopChatPolling();
+
   if(view==="admin"&&canManage(state.user)){currentView="admin";setActiveNav(currentView);void renderAdminPanel(document.querySelector<HTMLElement>("#main-content")!,async()=>{state.games=await api.games();cache.saveGames(state.games);await loadConfig()},notify);return}
   if(view==="emulator"){currentView="emulator";setActiveNav(currentView);renderEmulator();return}
-  currentView=view==="library"?"library":"home";setActiveNav(currentView);currentView==="library"?renderLibrary():renderHome();
+  if(view==="announcements"){currentView="announcements";setActiveNav(currentView);void renderAnnouncements();return}
+  if(view==="chat"){currentView="chat";setActiveNav(currentView);renderChat();return}
+
+  currentView=view==="library"?"library":"home";
+  setActiveNav(currentView);
+  currentView==="library"?renderLibrary():renderHome();
+}
+
+async function renderAnnouncements(){
+  const host=document.querySelector<HTMLElement>("#main-content")!;
+  host.innerHTML=`<section class="community-page"><div class="community-head"><div><span class="overline">ANIMUS TOPLULUK</span><h1>Duyurular</h1><p>Animus ekibinden yayınlanan güncel bilgilendirmeler.</p></div><button id="announcement-refresh">Yenile</button></div><div id="announcement-list" class="announcement-list"><div class="community-empty">Duyurular yükleniyor…</div></div></section>`;
+
+  document.querySelector("#announcement-refresh")?.addEventListener("click",()=>void renderAnnouncements());
+
+  try{
+    const items=await api.announcements();
+    if(currentView!=="announcements")return;
+    const list=document.querySelector<HTMLElement>("#announcement-list");
+    if(!list)return;
+    list.innerHTML=items.length?items.map(item=>{
+      const audienceLabels:Record<string,string>={all:"Herkes",free:"Ücretsiz",premium:"Premium",tester:"Tester",admin:"Yönetim"};
+      return `<article class="announcement-card"><header><div><div class="announcement-meta"><span class="audience-badge">${escapeHtml(audienceLabels[item.audience]||item.audience)}</span><span>${escapeHtml(dateTime(item.created_at))}</span></div><h2>${escapeHtml(item.title)}</h2></div></header><p>${escapeHtml(item.body)}</p></article>`;
+    }).join(""):'<div class="community-empty">Şu anda gösterilecek duyuru yok.</div>';
+  }catch(error){
+    const list=document.querySelector<HTMLElement>("#announcement-list");
+    if(list)list.innerHTML=`<div class="community-empty">${escapeHtml(error instanceof Error?error.message:"Duyurular yüklenemedi.")}</div>`;
+  }
+}
+
+function chatCanModerate(){
+  return state.user?.role==="admin"||state.user?.role==="super_admin";
+}
+
+async function refreshChat(forceBottom=false){
+  if(currentView!=="chat"||chatRefreshRunning)return;
+  const messagesHost=document.querySelector<HTMLElement>("#chat-messages");
+  if(!messagesHost)return;
+
+  chatRefreshRunning=true;
+  const status=document.querySelector<HTMLElement>("#chat-status");
+  const oldTop=messagesHost.scrollTop;
+  const wasNearBottom=messagesHost.scrollHeight-messagesHost.scrollTop-messagesHost.clientHeight<90;
+
+  try{
+    const items=await api.chatMessages();
+    if(currentView!=="chat")return;
+
+    const myId=Number(state.user?.id||0);
+    const canModerate=chatCanModerate();
+
+    messagesHost.innerHTML=items.length?items.map(item=>{
+      const mine=item.user_id===myId;
+      const staff=item.role==="admin"||item.role==="super_admin";
+      const initial=(item.display_name||"?").trim().charAt(0).toLocaleUpperCase("tr-TR");
+      return `<article class="chat-message ${mine?"mine":""}" data-message-id="${item.id}"><div class="chat-avatar">${escapeHtml(initial)}</div><div class="chat-bubble"><div class="chat-name"><b>${escapeHtml(item.display_name)}</b><span class="chat-role ${staff?"staff":""}">${escapeHtml(item.role)}</span></div><p>${escapeHtml(item.body)}</p><small class="chat-time">${escapeHtml(dateTime(item.created_at))}</small></div>${canModerate?`<button class="chat-delete" data-id="${item.id}" title="Mesajı sil">Sil</button>`:""}</article>`;
+    }).join(""):'<div class="community-empty">Henüz mesaj yok. İlk mesajı sen gönder.</div>';
+
+    if(forceBottom||wasNearBottom)messagesHost.scrollTop=messagesHost.scrollHeight;
+    else messagesHost.scrollTop=oldTop;
+
+    if(status)status.textContent="Bağlı · "+items.length+" mesaj";
+  }catch{
+    if(status)status.textContent="Bağlantı yenileniyor…";
+  }finally{
+    chatRefreshRunning=false;
+  }
+}
+
+function renderChat(){
+  stopChatPolling();
+  const host=document.querySelector<HTMLElement>("#main-content")!;
+  host.innerHTML=`<section class="chat-page"><div class="community-head"><div><span class="overline">ANIMUS TOPLULUK</span><h1>Canlı Chat</h1><p>Animus hesabınla topluluk sohbetine katıl.</p></div></div><div class="chat-shell"><div class="chat-toolbar"><div class="chat-live"><i></i><b>CANLI</b></div><span class="chat-status" id="chat-status">Bağlanıyor…</span></div><div class="chat-messages" id="chat-messages"><div class="community-empty">Mesajlar yükleniyor…</div></div><div class="chat-compose"><form id="chat-form"><textarea id="chat-input" maxlength="500" placeholder="Mesajını yaz…" required></textarea><button id="chat-send" type="submit">Gönder</button></form><div class="chat-compose-foot"><span>Topluluk kurallarına uygun iletişim kur.</span><span id="chat-count">0 / 500</span></div></div></div></section>`;
+
+  const input=document.querySelector<HTMLTextAreaElement>("#chat-input")!;
+  const form=document.querySelector<HTMLFormElement>("#chat-form")!;
+  const count=document.querySelector<HTMLElement>("#chat-count")!;
+  const messagesHost=document.querySelector<HTMLElement>("#chat-messages")!;
+
+  input.addEventListener("input",()=>{count.textContent=`${input.value.length} / 500`});
+  input.addEventListener("keydown",event=>{
+    if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();form.requestSubmit()}
+  });
+
+  messagesHost.addEventListener("click",event=>{
+    const button=(event.target as HTMLElement).closest<HTMLButtonElement>(".chat-delete");
+    if(!button)return;
+    const id=Number(button.dataset.id);
+    if(!id||!confirm("Bu chat mesajı silinsin mi?"))return;
+    button.disabled=true;
+    void api.deleteChat(id).then(()=>refreshChat()).catch(error=>{notify(error instanceof Error?error.message:"Mesaj silinemedi.",true);button.disabled=false});
+  });
+
+  form.addEventListener("submit",async event=>{
+    event.preventDefault();
+    const body=input.value.trim();
+    if(!body)return;
+    const send=document.querySelector<HTMLButtonElement>("#chat-send")!;
+    send.disabled=true;
+    try{
+      await api.sendChat(body);
+      input.value="";
+      count.textContent="0 / 500";
+      await refreshChat(true);
+      input.focus();
+    }catch(error){
+      notify(error instanceof Error?error.message:"Mesaj gönderilemedi.",true);
+    }finally{
+      send.disabled=false;
+    }
+  });
+
+  void refreshChat(true);
+  chatPollTimer=window.setInterval(()=>void refreshChat(),2500);
+  input.focus();
 }
 
 function renderHome(){
@@ -250,7 +379,13 @@ function renderLibrary(){
 
 function filteredGames(){return filterCatalog(state.games,state.query,state.filter,id=>installations.version(id))}
 /** Kurulum durumu değişince açık olan görünümü yeniden çizer. */
-function refreshCurrentView(){if(currentView!=="admin"&&document.querySelector(".shell"))showView(currentView)}
+function refreshCurrentView(){
+  if(currentView==="library")renderLibrary();
+  else if(currentView==="emulator")renderEmulator();
+  else if(currentView==="announcements")void renderAnnouncements();
+  else if(currentView==="chat")renderChat();
+  else renderHome();
+}
 function gameCards(games:Game[]){
   if(!games.length)return '<div class="empty-catalog">Bu bölümde henüz yayınlanmış yama bulunmuyor.</div>';
 
@@ -486,5 +621,5 @@ async function start(){
     catch(error){loginView(error instanceof Error?error.message:"Sunucuya bağlanılamadı.",true)}
   }else loginView();
 }
-api.onUnauthorized(message=>{state.user=null;state.selected=null;state.games=[];loginView(message,true)});
+api.onUnauthorized(message=>{stopChatPolling();state.user=null;state.selected=null;state.games=[];loginView(message,true)});
 start().catch(error=>loginView(error instanceof Error?error.message:"Uygulama başlatılamadı.",true));
