@@ -102,44 +102,102 @@ function renderHome(){
 
 type PsPlatform="ps1"|"ps2";
 
-const psGames=[
+type ManagedPsGame={
+  platform:PsPlatform;
+  platformLabel:string;
+  title:string;
+  emulator:string;
+  match:(game:Game)=>boolean;
+};
+
+const psGames:ManagedPsGame[]=[
   {
-    key:"silent-hill-1",
-    platform:"ps1" as PsPlatform,
+    platform:"ps1",
     platformLabel:"PlayStation 1",
     title:"Silent Hill",
-    description:"Silent Hill PS1 oyununu DuckStation üzerinden başlat.",
+    emulator:"DuckStation",
     match:(game:Game)=>/^silent hill(?: 1)?$/i.test(game.name.trim())
   },
   {
-    key:"resident-evil-code-veronica",
-    platform:"ps2" as PsPlatform,
+    platform:"ps2",
     platformLabel:"PlayStation 2",
     title:"Resident Evil Code: Veronica",
-    description:"Resident Evil Code: Veronica PS2 oyununu PCSX2 üzerinden başlat.",
+    emulator:"PCSX2",
     match:(game:Game)=>/resident evil.*code[: ]?\s*veronica/i.test(game.name)
   }
 ];
 
-function psGamePath(key:string){return localStorage.getItem("ps_game_"+key)||""}
-function compactPath(value:string){if(!value)return "Oyun dosyası seçilmedi";return value.length>54?"…"+value.slice(-53):value}
+function psConfig(game:Game){
+  return psGames.find(item=>item.match(game));
+}
+
+function isManagedPsGame(game:Game){
+  return Boolean(psConfig(game));
+}
+
+function psCatalogGame(item:ManagedPsGame){
+  return state.games.find(item.match);
+}
+
+/** PS oyunlarında kök klasörü kullanıcı seçmez; Rust tarafı LocalAppData altında oluşturur. */
+async function managedPsRoot(game:Game){
+  const installedRoot=installations.root(game.id);
+  if(installedRoot)return installedRoot;
+
+  const root=await invoke<string>("prepare_ps_game_root",{gameId:game.id});
+  localStorage.setItem("root_"+game.id,root);
+  return root;
+}
+
+/** Kurulmuş PS paketinin içindeki ISO/CUE/CHD dosyasını Rust otomatik bulur ve emülatörde açar. */
+async function launchInstalledPsGame(game:Game,platform:PsPlatform){
+  if(!installations.version(game.id)){
+    notify("Önce OYUNU HAZIRLA ile oyun paketini kur.",true);
+    return;
+  }
+
+  try{
+    const root=await managedPsRoot(game);
+    const image=await invoke<string>("launch_installed_ps_game",{platform,gameRoot:root});
+    notify(`${image} başlatılıyor…`);
+  }catch(error){
+    notify("Oyun başlatılamadı: "+(error instanceof Error?error.message:String(error)),true);
+  }
+}
 
 function renderEmulator(){
   const cards=psGames.map(item=>{
-    const game=state.games.find(item.match);
-    const image=game?cover(game):asset("/assets/placeholders/cover-generic.svg");
-    const savedPath=psGamePath(item.key);
+    const game=psCatalogGame(item);
+
+    if(!game){
+      return `<article class="game-card emulator-game-card">
+        <div class="cover" style="background-image:url('${escapeHtml(asset("/assets/placeholders/cover-generic.svg"))}')">
+          <span class="access free">${escapeHtml(item.platformLabel)}</span>
+          <span class="install-badge">KATALOĞA EKLENMEDİ</span>
+        </div>
+        <h3>${escapeHtml(item.title)}</h3>
+        <div class="meta"><span>${escapeHtml(item.emulator)}</span><b>${item.platform.toUpperCase()}</b></div>
+      </article>`;
+    }
+
+    const installed=installations.version(game.id);
+    const update=installations.hasUpdate(game.id,game.patch_version);
+    const noPatch=!game.patch_version_id;
+    const status=update?"GÜNCELLEME VAR":installed?"OYNAMAYA HAZIR":game.patch_version?"OYUNU HAZIRLA":"PAKET BEKLENİYOR";
+
     return `<article class="game-card emulator-game-card">
-      <div class="cover" style="background-image:url('${escapeHtml(image)}')">
+      <div class="cover" style="background-image:url('${escapeHtml(cover(game))}')">
         <span class="access free">${escapeHtml(item.platformLabel)}</span>
-        <span class="install-badge ${savedPath?"installed":""}">${savedPath?"HAZIR":"DOSYA SEÇ"}</span>
+        <span class="install-badge ${installed?"installed":""}">${status}</span>
       </div>
-      <h3>${escapeHtml(game?.name||item.title)}</h3>
-      <div class="meta"><span>${escapeHtml(item.description)}</span><b>${item.platform.toUpperCase()}</b></div>
-      <div style="margin-top:10px;min-height:34px"><small title="${escapeHtml(savedPath)}">${escapeHtml(compactPath(savedPath))}</small></div>
+      <h3>${escapeHtml(game.name)}</h3>
+      <div class="meta"><span>${escapeHtml(item.emulator)} ile çalışır</span><b>${item.platform.toUpperCase()}</b></div>
       <div class="detail-actions" style="margin-top:12px">
-        <button class="ghost ps-select" data-key="${escapeHtml(item.key)}" data-platform="${item.platform}">OYUN DOSYASINI SEÇ</button>
-        <button class="ps-play" data-key="${escapeHtml(item.key)}" data-platform="${item.platform}" ${savedPath?"":"disabled"}>OYNA</button>
+        ${
+          installed
+            ? `<button class="ps-play-installed" data-id="${game.id}" data-platform="${item.platform}">OYNA</button>${update?`<button class="ghost ps-prepare" data-id="${game.id}">OYUNU GÜNCELLE</button>`:""}`
+            : `<button class="ps-prepare" data-id="${game.id}" ${noPatch?"disabled":""}>OYUNU HAZIRLA</button>`
+        }
       </div>
     </article>`;
   }).join("");
@@ -149,37 +207,21 @@ function renderEmulator(){
       <div>
         <span class="overline">ANIMUS EMU</span>
         <h1>PS Oyun Emülatör</h1>
-        <p class="muted">Kendi oyun yedeğini seç. PS1 oyunları DuckStation, PS2 oyunları PCSX2 ile Animus üzerinden başlatılır.</p>
+        <p class="muted">PlayStation oyun paketi MediaFire üzerinden Animus tarafından hazırlanır. ISO, CUE veya CHD dosyasını ayrıca seçmen gerekmez.</p>
       </div>
     </div>
     <div class="game-grid">${cards}</div>
   </section>`;
 
-  document.querySelectorAll<HTMLButtonElement>(".ps-select").forEach(button=>button.onclick=()=>void selectPsGame(button.dataset.platform as PsPlatform,button.dataset.key!));
-  document.querySelectorAll<HTMLButtonElement>(".ps-play").forEach(button=>button.onclick=()=>void launchPsGame(button.dataset.platform as PsPlatform,button.dataset.key!));
-}
+  document.querySelectorAll<HTMLButtonElement>(".ps-prepare").forEach(button=>button.onclick=()=>{
+    const game=state.games.find(item=>item.id===Number(button.dataset.id));
+    if(game)void install(game);
+  });
 
-async function selectPsGame(platform:PsPlatform,key:string){
-  try{
-    const selected=await invoke<string|null>("select_ps_game_file",{platform});
-    if(!selected)return;
-    localStorage.setItem("ps_game_"+key,selected);
-    renderEmulator();
-    notify("Oyun dosyası kaydedildi.");
-  }catch(error){
-    notify("Oyun dosyası seçilemedi: "+(error instanceof Error?error.message:String(error)),true);
-  }
-}
-
-async function launchPsGame(platform:PsPlatform,key:string){
-  const gamePath=psGamePath(key);
-  if(!gamePath){notify("Önce oyun dosyasını seç.",true);return}
-  try{
-    await invoke("launch_ps_game",{platform,gamePath});
-    notify("Oyun başlatılıyor…");
-  }catch(error){
-    notify("Emülatör başlatılamadı: "+(error instanceof Error?error.message:String(error)),true);
-  }
+  document.querySelectorAll<HTMLButtonElement>(".ps-play-installed").forEach(button=>button.onclick=()=>{
+    const game=state.games.find(item=>item.id===Number(button.dataset.id));
+    if(game)void launchInstalledPsGame(game,button.dataset.platform as PsPlatform);
+  });
 }
 
 function renderLibrary(){
@@ -191,26 +233,102 @@ function renderLibrary(){
 function filteredGames(){return filterCatalog(state.games,state.query,state.filter,id=>installations.version(id))}
 /** Kurulum durumu değişince açık olan görünümü yeniden çizer. */
 function refreshCurrentView(){if(currentView!=="admin"&&document.querySelector(".shell"))showView(currentView)}
-function gameCards(games:Game[]){if(!games.length)return '<div class="empty-catalog">Bu bölümde henüz yayınlanmış yama bulunmuyor.</div>';return games.map(game=>{const installed=installations.version(game.id);const update=installations.hasUpdate(game.id,game.patch_version);const orphan=installations.isOrphaned(game.id);if(orphan)return `<article class="game-card" data-id="${game.id}"><div class="cover" style="background-image:url('${escapeHtml(cover(game))}')"><span class="access ${game.access_type}">${game.access_type==="premium"?"PREMIUM":"FREE"}</span><span class="install-badge orphan">Oyun klasörü bulunamadı</span><button>Detay →</button></div><h3>${escapeHtml(game.name)}</h3><div class="meta"><span>Kurulum kaydı var, klasör kayıp</span><b>%${game.translation_percent}</b></div><div class="progress"><i style="width:${game.translation_percent}%"></i></div></article>`;return `<article class="game-card" data-id="${game.id}"><div class="cover" style="background-image:url('${escapeHtml(cover(game))}')"><span class="access ${game.access_type}">${game.access_type==="premium"?"PREMIUM":"FREE"}</span><span class="install-badge ${installed?"installed":""}">${update?"Güncelleme Var":installed?"Kurulu":game.patch_version?"Yama Hazır":"Yama Bekleniyor"}</span><button>Detay →</button></div><h3>${escapeHtml(game.name)}</h3><div class="meta"><span>${escapeHtml(game.patch_version?"Yama "+game.patch_version:"Türkçe yama henüz yüklenmedi.")}</span><b>%${game.translation_percent}</b></div><div class="progress"><i style="width:${game.translation_percent}%"></i></div></article>`}).join("")}
+function gameCards(games:Game[]){
+  if(!games.length)return '<div class="empty-catalog">Bu bölümde henüz yayınlanmış yama bulunmuyor.</div>';
+
+  return games.map(game=>{
+    const installed=installations.version(game.id);
+    const update=installations.hasUpdate(game.id,game.patch_version);
+    const orphan=installations.isOrphaned(game.id);
+    const ps=psConfig(game);
+
+    if(orphan&&!ps){
+      return `<article class="game-card" data-id="${game.id}"><div class="cover" style="background-image:url('${escapeHtml(cover(game))}')"><span class="access ${game.access_type}">${game.access_type==="premium"?"PREMIUM":"FREE"}</span><span class="install-badge orphan">Oyun klasörü bulunamadı</span><button>Detay →</button></div><h3>${escapeHtml(game.name)}</h3><div class="meta"><span>Kurulum kaydı var, klasör kayıp</span><b>%${game.translation_percent}</b></div><div class="progress"><i style="width:${game.translation_percent}%"></i></div></article>`;
+    }
+
+    const badge=ps
+      ? (update?"Güncelleme Var":installed?"Oynamaya Hazır":game.patch_version?"Oyun Hazırla":"Paket Bekleniyor")
+      : (update?"Güncelleme Var":installed?"Kurulu":game.patch_version?"Yama Hazır":"Yama Bekleniyor");
+
+    const description=ps
+      ? (game.patch_version?`Animus Emu paket ${game.patch_version}`:"Oyun paketi henüz yüklenmedi.")
+      : (game.patch_version?`Yama ${game.patch_version}`:"Türkçe yama henüz yüklenmedi.");
+
+    return `<article class="game-card" data-id="${game.id}"><div class="cover" style="background-image:url('${escapeHtml(cover(game))}')"><span class="access ${game.access_type}">${ps?escapeHtml(ps.platformLabel):(game.access_type==="premium"?"PREMIUM":"FREE")}</span><span class="install-badge ${installed?"installed":""}">${badge}</span><button>Detay →</button></div><h3>${escapeHtml(game.name)}</h3><div class="meta"><span>${escapeHtml(description)}</span><b>%${game.translation_percent}</b></div><div class="progress"><i style="width:${game.translation_percent}%"></i></div></article>`;
+  }).join("");
+}
 function renderGames(){const grid=document.querySelector("#game-grid");if(!grid)return;grid.innerHTML=gameCards(filteredGames());bindGameCards()}
 function bindGameCards(){document.querySelectorAll<HTMLElement>(".game-card").forEach(card=>card.onclick=()=>showGame(state.games.find(game=>game.id===Number(card.dataset.id))!))}
 
 async function loadGames(force=false){try{state.games=await api.games();cache.saveGames(state.games);await log("info","catalog",`${state.games.length} oyun API üzerinden yüklendi`);if(document.querySelector(".shell"))shell();if(force)notify("Katalog güncellendi")}catch{state.games=cache.readGames();await log("warning","catalog",`API kullanılamadı; ${state.games.length} önbellek kaydı gösteriliyor`);if(document.querySelector(".shell"))shell();notify("Sunucuya ulaşılamadı; önbellekteki katalog gösteriliyor.",true)}}
 
 async function showGame(summary:Game){
-  let game=summary;try{game=await api.game(summary.id)}catch{notify("Oyun ayrıntıları güncellenemedi; önbellekteki bilgiler gösteriliyor.",true)}
-  state.selected=game;const record=installations.get(game.id);const installed=installations.version(game.id);const update=installations.hasUpdate(game.id,game.patch_version);const stores=(game.supported_stores||[]).join(" · ")||"Manuel";const noPatch=!game.patch_version_id;const rootPath=installations.root(game.id)||localStorage.getItem("root_"+game.id)||"";const blocked=!meetsMinimum(state.loaderVersion,game.minimum_loader_version);
-  document.querySelector("#modal-root")!.innerHTML=`<div class="modal-backdrop"><section class="game-modal"><button class="modal-close">×</button><div class="detail-banner" style="background-image:linear-gradient(90deg,#0b0910f2,#0b091077),url('${escapeHtml(banner(game))}')"><img src="${escapeHtml(cover(game))}" alt=""><div><span class="overline">${escapeHtml(game.categories.join(" · ")||"OYUN")}</span><h2>${escapeHtml(game.name)}</h2><p>${escapeHtml(game.description||game.short_description||"Oyun bilgileri yönetim panelinden güncellenebilir.")}</p><span class="detail-access">${game.access_type==="premium"?"PREMIUM":"FREE"} · %${game.translation_percent} ÇEVİRİ</span></div></div><div class="detail-grid"><article><small>Yama sürümü</small><b>${escapeHtml(game.patch_version||"Henüz yüklenmedi")}</b></article><article><small>Desteklenen oyun</small><b>${escapeHtml(game.game_version||"Belirtilmedi")}</b></article><article><small>Patch boyutu</small><b>${size(game.size_bytes)}</b></article><article><small>Son güncelleme</small><b>${date(game.published_at)}</b></article><article><small>Mağaza</small><b>${escapeHtml(stores)}</b></article><article><small>Kurulum</small><b>${installed?"Kurulu "+escapeHtml(installed):"Kurulu değil"}</b></article></div><section class="changelog"><h3>Değişiklik Notları</h3><p>${escapeHtml(game.changelog|| (noPatch?"Türkçe yama henüz yüklenmedi.":"Değişiklik notu yayınlanmadı."))}</p></section><label class="path-row">Oyun dizini<input id="game-root" readonly value="${escapeHtml(rootPath||"Otomatik bulunacak / manuel seçilebilir")}"><button id="select-root">OYUN KLASÖRÜNÜ SEÇ</button></label><div class="detail-actions"><button id="install-action" ${noPatch||blocked?"disabled":""}>${update?"YAMAYI GÜNCELLE":"YAMAYI KUR"}</button><button class="ghost" id="verify-action" ${installed?"":"disabled"}>DOSYALARI DOĞRULA</button><button class="danger" id="uninstall-action" ${record?"":"disabled"}>YAMAYI KALDIR</button></div>${noPatch?'<div class="patch-unavailable">Türkçe yama henüz yüklenmedi.</div>':""}${blocked?`<div class="patch-unavailable">Bu yama en az ${escapeHtml(game.minimum_loader_version)} sürümünde loader gerektiriyor. Kurulu sürüm: ${escapeHtml(state.loaderVersion)}.</div>`:""}${record&&!record.root_exists?'<div class="patch-unavailable">Kurulum kaydı var ama oyun klasörü bulunamıyor. Klasörü geri getirin veya kaydı temizlemek için yamayı kaldırmayı deneyin.</div>':""}${record&&!record.backup_exists?'<div class="patch-unavailable">Bu kurulumun yedeği bulunamıyor; kaldırma işlemi oyunu orijinal haline döndüremeyebilir.</div>':""}</section></div>`;
+  let game=summary;
+  try{game=await api.game(summary.id)}
+  catch{notify("Oyun ayrıntıları güncellenemedi; önbellekteki bilgiler gösteriliyor.",true)}
+
+  state.selected=game;
+
+  const record=installations.get(game.id);
+  const installed=installations.version(game.id);
+  const update=installations.hasUpdate(game.id,game.patch_version);
+  const ps=psConfig(game);
+  const stores=ps?`${ps.platformLabel} · Animus Emu`:(game.supported_stores||[]).join(" · ")||"Manuel";
+  const noPatch=!game.patch_version_id;
+  const rootPath=installations.root(game.id)||localStorage.getItem("root_"+game.id)||"";
+  const blocked=!meetsMinimum(state.loaderVersion,game.minimum_loader_version);
+
+  const pathSection=ps
+    ? `<div class="patch-unavailable" style="border-color:transparent;background:rgba(183,243,74,.06)">Oyun imajı MediaFire paketinden Animus tarafından otomatik hazırlanır. Oyun klasörü veya ISO/CUE/CHD seçmen gerekmez.</div>`
+    : `<label class="path-row">Oyun dizini<input id="game-root" readonly value="${escapeHtml(rootPath||"Otomatik bulunacak / manuel seçilebilir")}"><button id="select-root">OYUN KLASÖRÜNÜ SEÇ</button></label>`;
+
+  const actions=ps
+    ? (
+        installed
+          ? `<div class="detail-actions"><button id="ps-play-action">OYNA</button>${update?`<button class="ghost" id="install-action" ${noPatch||blocked?"disabled":""}>OYUNU GÜNCELLE</button>`:""}<button class="ghost" id="verify-action">DOSYALARI DOĞRULA</button><button class="danger" id="uninstall-action" ${record?"":"disabled"}>OYUNU KALDIR</button></div>`
+          : `<div class="detail-actions"><button id="install-action" ${noPatch||blocked?"disabled":""}>OYUNU HAZIRLA</button></div>`
+      )
+    : `<div class="detail-actions"><button id="install-action" ${noPatch||blocked?"disabled":""}>${update?"YAMAYI GÜNCELLE":"YAMAYI KUR"}</button><button class="ghost" id="verify-action" ${installed?"":"disabled"}>DOSYALARI DOĞRULA</button><button class="danger" id="uninstall-action" ${record?"":"disabled"}>YAMAYI KALDIR</button></div>`;
+
+  document.querySelector("#modal-root")!.innerHTML=`<div class="modal-backdrop"><section class="game-modal"><button class="modal-close">×</button><div class="detail-banner" style="background-image:linear-gradient(90deg,#0b0910f2,#0b091077),url('${escapeHtml(banner(game))}')"><img src="${escapeHtml(cover(game))}" alt=""><div><span class="overline">${escapeHtml(ps?ps.platformLabel:(game.categories.join(" · ")||"OYUN"))}</span><h2>${escapeHtml(game.name)}</h2><p>${escapeHtml(game.description||game.short_description||"Oyun bilgileri yönetim panelinden güncellenebilir.")}</p><span class="detail-access">${game.access_type==="premium"?"PREMIUM":"FREE"} · %${game.translation_percent} ÇEVİRİ</span></div></div><div class="detail-grid"><article><small>${ps?"Paket sürümü":"Yama sürümü"}</small><b>${escapeHtml(game.patch_version||"Henüz yüklenmedi")}</b></article><article><small>Desteklenen oyun</small><b>${escapeHtml(game.game_version||"Belirtilmedi")}</b></article><article><small>${ps?"Oyun paketi":"Patch"} boyutu</small><b>${size(game.size_bytes)}</b></article><article><small>Son güncelleme</small><b>${date(game.published_at)}</b></article><article><small>${ps?"Platform":"Mağaza"}</small><b>${escapeHtml(stores)}</b></article><article><small>Durum</small><b>${installed?(ps?"Oynamaya hazır":"Kurulu "+escapeHtml(installed)):"Kurulu değil"}</b></article></div><section class="changelog"><h3>Değişiklik Notları</h3><p>${escapeHtml(game.changelog||(noPatch?(ps?"Oyun paketi henüz yüklenmedi.":"Türkçe yama henüz yüklenmedi."):"Değişiklik notu yayınlanmadı."))}</p></section>${pathSection}${actions}${noPatch?`<div class="patch-unavailable">${ps?"Oyun paketi henüz yüklenmedi.":"Türkçe yama henüz yüklenmedi."}</div>`:""}${blocked?`<div class="patch-unavailable">Bu paket en az ${escapeHtml(game.minimum_loader_version)} sürümünde loader gerektiriyor. Kurulu sürüm: ${escapeHtml(state.loaderVersion)}.</div>`:""}${record&&!record.root_exists&&!ps?'<div class="patch-unavailable">Kurulum kaydı var ama oyun klasörü bulunamıyor. Klasörü geri getirin veya kaydı temizlemek için yamayı kaldırmayı deneyin.</div>':""}${record&&!record.backup_exists?`<div class="patch-unavailable">${ps?"Bu oyun paketinin":"Bu kurulumun"} yedeği bulunamıyor; kaldırma işlemi eksik kalabilir.</div>`:""}</section></div>`;
+
   document.querySelector(".modal-close")!.addEventListener("click",closeModal);
-  document.querySelector("#select-root")!.addEventListener("click",async()=>{try{const required=game.executable?[game.executable]:[];const root=await patchService.chooseGameRoot(required);if(root){localStorage.setItem("root_"+game.id,root);(document.querySelector("#game-root") as HTMLInputElement).value=root}}catch(error){notify(patchMessage(error),true)}});
-  document.querySelector("#install-action")?.addEventListener("click",()=>install(game));document.querySelector("#verify-action")?.addEventListener("click",()=>operation(async root=>patchService.verify(game.id,root),"Dosyalar doğrulandı"));document.querySelector("#uninstall-action")?.addEventListener("click",()=>uninstall(game));
+
+  if(!ps){
+    document.querySelector("#select-root")?.addEventListener("click",async()=>{
+      try{
+        const required=game.executable?[game.executable]:[];
+        const root=await patchService.chooseGameRoot(required);
+        if(root){
+          localStorage.setItem("root_"+game.id,root);
+          const input=document.querySelector("#game-root") as HTMLInputElement|null;
+          if(input)input.value=root;
+        }
+      }catch(error){notify(patchMessage(error),true)}
+    });
+  }
+
+  document.querySelector("#install-action")?.addEventListener("click",()=>install(game));
+  document.querySelector("#verify-action")?.addEventListener("click",()=>operation(async root=>patchService.verify(game.id,root),"Dosyalar doğrulandı"));
+  document.querySelector("#uninstall-action")?.addEventListener("click",()=>uninstall(game));
+
+  if(ps){
+    document.querySelector("#ps-play-action")?.addEventListener("click",()=>void launchInstalledPsGame(game,ps.platform));
+  }
 }
 
 async function ensureRoot(game:Game){
-  // Öncelik sırası: gerçek kurulum kaydı > kullanıcının seçtiği yol > Steam tespiti.
+  if(isManagedPsGame(game)){
+    return managedPsRoot(game);
+  }
+
+  // Normal PC oyunlarında mevcut davranış aynen devam eder.
   let root=installations.root(game.id)||localStorage.getItem("root_"+game.id);
   const required=game.executable?[game.executable]:[];
-  if(!root&&game.steam_app_id){root=await patchService.detectGame(game.steam_app_id,required);if(root)localStorage.setItem("root_"+game.id,root)}
+  if(!root&&game.steam_app_id){
+    root=await patchService.detectGame(game.steam_app_id,required);
+    if(root)localStorage.setItem("root_"+game.id,root);
+  }
   if(!root)throw new Error("Oyun dizini bulunamadı. Lütfen oyun klasörünü manuel seçin.");
   return root;
 }
@@ -229,8 +347,9 @@ async function operation(task:(root:string)=>Promise<unknown>,success:string,don
 
 /** Kaldırma: dosyalar elle değiştirilmişse kullanıcıya zorla seçeneği sunulur. */
 async function uninstall(game:Game){
+  const ps=psConfig(game);
   try{
-    progress({stage:"prepare",percent:5,message:"Yama kaldırılıyor"});
+    progress({stage:"prepare",percent:5,message:ps?"Oyun paketi kaldırılıyor":"Yama kaldırılıyor"});
     const root=await ensureRoot(game);
     try{
       await patchService.uninstall(game.id,root,false);
@@ -242,43 +361,53 @@ async function uninstall(game:Game){
       await patchService.uninstall(game.id,root,true);
     }
     await installations.refresh();
-    await log("info","uninstall",`Oyun #${game.id} yaması kaldırıldı`);
-    progress({stage:"complete",percent:100,message:"Yama kaldırıldı"});
+    await log("info","uninstall",`Oyun #${game.id} ${ps?"paketi":"yaması"} kaldırıldı`);
+    progress({stage:"complete",percent:100,message:ps?"Oyun paketi kaldırıldı":"Yama kaldırıldı"});
     setTimeout(()=>{closeModal();refreshCurrentView()},900);
   }catch(error){progress({stage:"error",percent:0,message:patchMessage(error)},true)}
 }
 async function install(game:Game){
+  const ps=psConfig(game);
   try{
     if(!navigator.onLine)throw new Error("Kurulum için internet bağlantısı gerekli.");
-    if(!game.patch_version_id)throw new Error("Türkçe yama henüz yüklenmedi.");
+    if(!game.patch_version_id)throw new Error(ps?"Oyun paketi henüz yüklenmedi.":"Türkçe yama henüz yüklenmedi.");
+
     const root=await ensureRoot(game);
     const patch=await api.patch(game.id);
     const id=Number(patch.id);
     const manifest=await api.manifest(id) as {patch?:{minimum_loader_version?:string}};
-    // Manifestteki minimum loader sürümü eskiden hiç denetlenmiyordu.
+
     const minimum=manifest.patch?.minimum_loader_version;
     if(!meetsMinimum(state.loaderVersion,minimum))
-      throw new Error(`Bu yama en az ${minimum} sürümünde loader gerektiriyor. Kurulu sürüm: ${state.loaderVersion}.`);
+      throw new Error(`Bu paket en az ${minimum} sürümünde loader gerektiriyor. Kurulu sürüm: ${state.loaderVersion}.`);
+
     const dry=await patchService.dryRun(manifest,root);
     const existing=installations.version(game.id);
-    const notice=existing?`Kurulu ${existing} sürümü önce kaldırılıp oyun orijinal haline döndürülecek, ardından yeni sürüm kurulacak.\n\n`:"";
-    if(!confirm(`${notice}${dry.created_files} dosya oluşturulacak, ${dry.changed_files} dosya değiştirilecek ve ${dry.backup_files} yedek alınacak. Devam edilsin mi?`))return;
+    const notice=existing?`Kurulu ${existing} sürümü önce kaldırılacak ve yeni sürüm hazırlanacak.\n\n`:"";
+
+    const question=ps
+      ? `${notice}Oyun paketi MediaFire üzerinden indirilecek ve Animus Emu klasörüne hazırlanacak. ${dry.created_files} dosya oluşturulacak, ${dry.changed_files} dosya değiştirilecek. Devam edilsin mi?`
+      : `${notice}${dry.created_files} dosya oluşturulacak, ${dry.changed_files} dosya değiştirilecek ve ${dry.backup_files} yedek alınacak. Devam edilsin mi?`;
+
+    if(!confirm(question))return;
+
     const download=await api.downloadToken(id);
-    progress({stage:"download",percent:1,message:"Yama indirmesi hazırlanıyor"});
+    progress({stage:"download",percent:1,message:ps?"Oyun paketi indirmesi hazırlanıyor":"Yama indirmesi hazırlanıyor"});
+
     try{
       await patchService.install(manifest,root,download.url,false);
     }catch(error){
       const message=error instanceof Error?error.message:String(error);
-      // Önceki yamanın dosyaları elle değiştirilmişse kullanıcıya karar bırakılır.
       if(!/Önceki yamanın dosyaları değişmiş|yedeği bulunamadı/i.test(message))throw error;
       if(!confirm(message+"\n\nZorla devam edilsin mi? Bu dosyalardaki kendi değişiklikleriniz kaybolur."))
         {progress({stage:"error",percent:0,message:"Kurulum iptal edildi."},true);return}
       const retry=await api.downloadToken(id);
       await patchService.install(manifest,root,retry.url,true);
     }
+
     await installations.refresh();
-    await log("info","install",`Oyun #${game.id} yaması kuruldu`);
-    progress({stage:"complete",percent:100,message:"Kurulum tamamlandı"});
+    await log("info","install",`Oyun #${game.id} ${ps?"Animus Emu paketi":"yaması"} kuruldu`);
+    progress({stage:"complete",percent:100,message:ps?"Oyun hazır — OYNA seçeneğini kullanabilirsin":"Kurulum tamamlandı"});
     setTimeout(()=>{closeModal();refreshCurrentView()},900);
   }catch(error){progress({stage:"error",percent:0,message:patchMessage(error)},true)}
 }
