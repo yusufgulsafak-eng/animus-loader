@@ -38,6 +38,38 @@ jobs:
             throw "VITE_API_BASE_URL must be exactly $expected"
           }
 
+      - name: Prepare redistributable PS1 OpenBIOS
+        shell: pwsh
+        run: |
+          $directory = "loader/src-tauri/resources/bios/ps1"
+          New-Item -ItemType Directory -Force -Path $directory | Out-Null
+
+          $commit = "01c647e8a2fa0b294944a2bbfcda9d7303061ea1"
+          $biosUrl = "https://raw.githubusercontent.com/mstan/psxrecomp/$commit/bios/openbios.bin"
+          $licenseUrl = "https://raw.githubusercontent.com/mstan/psxrecomp/$commit/bios/OpenBIOS.LICENSE"
+
+          $biosPath = Join-Path $directory "openbios.bin"
+          $licensePath = Join-Path $directory "OpenBIOS.LICENSE"
+
+          Invoke-WebRequest -Uri $biosUrl -OutFile $biosPath -UseBasicParsing
+          Invoke-WebRequest -Uri $licenseUrl -OutFile $licensePath -UseBasicParsing
+
+          $expectedSha256 = "fabe498fbf224e4721f12f31b6f5fe0659205e341dc4e5c5f91b9bd1a1011c57"
+          $actualSha256 = (Get-FileHash -LiteralPath $biosPath -Algorithm SHA256).Hash.ToLowerInvariant()
+
+          if ($actualSha256 -ne $expectedSha256) {
+            Remove-Item -LiteralPath $biosPath -Force -ErrorAction SilentlyContinue
+            throw "OpenBIOS SHA-256 mismatch. Expected $expectedSha256, got $actualSha256"
+          }
+
+          $size = (Get-Item -LiteralPath $biosPath).Length
+          if ($size -ne 524288) {
+            Remove-Item -LiteralPath $biosPath -Force -ErrorAction SilentlyContinue
+            throw "OpenBIOS size mismatch. Expected 524288 bytes, got $size"
+          }
+
+          Write-Host "OpenBIOS verified: $actualSha256 ($size bytes)"
+
       - name: Verify Windows GUI subsystem
         shell: pwsh
         run: |
