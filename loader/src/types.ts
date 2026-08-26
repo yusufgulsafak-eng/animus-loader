@@ -1,6 +1,6 @@
 export type ReleaseChannel = "stable" | "beta" | "internal";
 export interface Subscription {plan_name:string;status:"active"|"trial"|"expired"|"cancelled";starts_at:string;ends_at?:string|null}
-export interface User {id:number;email:string;display_name:string;role:string;release_channel:ReleaseChannel;premium:boolean;subscription?:Subscription|null;permissions?:Record<string,boolean>}
+export interface User {id:number;email:string;display_name:string;avatar_path?:string|null;role:string;release_channel:ReleaseChannel;premium:boolean;subscription?:Subscription|null;permissions?:Record<string,boolean>}
 export interface Game {id:number;name:string;slug:string;short_description?:string|null;description?:string|null;cover_path?:string|null;banner_path?:string|null;icon_path?:string|null;cover_url?:string|null;banner_url?:string|null;icon_url?:string|null;local_cover_path?:string|null;local_banner_path?:string|null;local_icon_path?:string|null;access_type:"free"|"premium";translation_percent:number;patch_version?:string|null;patch_version_id?:number|null;game_version?:string|null;size_bytes?:number|null;categories:string[];steam_app_id?:string|null;epic_catalog_id?:string|null;executable?:string|null;process_name?:string|null;published_at?:string|null;changelog?:string|null;supported_stores?:string[];minimum_loader_version?:string|null}
 export type BackgroundType = "default"|"image"|"video";
 export interface BackgroundConfig {type:BackgroundType|string;image_url?:string|null;video_url?:string|null;fallback_url?:string|null;overlay?:number;version?:string}
