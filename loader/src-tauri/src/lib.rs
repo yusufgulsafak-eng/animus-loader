@@ -1249,6 +1249,9 @@ async fn install_ps1_bios(
 
 const PS2_MIN_BIOS_SIZE: u64 = 4 * 1024 * 1024;
 const PS2_MAX_BIOS_SIZE: u64 = 8 * 1024 * 1024;
+const PS2_MAX_BIOS_ZIP_SIZE: u64 = 64 * 1024 * 1024;
+const PS2_MAX_BIOS_ZIP_ENTRIES: usize = 128;
+const PS2_MAX_EXTRACTED_BIOS_BYTES: u64 = 32 * 1024 * 1024;
 
 fn pcsx2_portable_bios_directory(
     emulator: &Path,
@@ -1290,57 +1293,8 @@ fn pcsx2_portable_bios_available(
         })
 }
 
-/// Kullanıcının kendi PS2 cihazından dump ettiği BIOS'u seçer ve
-/// Animus'un yönettiği PCSX2/bios klasörüne kopyalar.
-/// PCSX2 henüz otomatik kurulmamış olsa bile BIOS güvenli şekilde
-/// hazırlanır; daha sonra aynı yönetilen klasör kullanılacaktır.
-/// Animus herhangi bir BIOS indirmez veya dağıtmaz.
-#[tauri::command]
-async fn install_ps2_bios(
-    app: AppHandle,
-) -> Result<Option<String>, LoaderError> {
-    let selected = app
-        .dialog()
-        .file()
-        .add_filter(
-            "PlayStation 2 BIOS",
-            &["bin", "rom"],
-        )
-        .blocking_pick_file();
-
-    let Some(selected) = selected else {
-        return Ok(None);
-    };
-
-    let source = selected.into_path().map_err(|error| {
-        LoaderError::Other(format!(
-            "Seçilen BIOS dosyasının yolu okunamadı: {error}"
-        ))
-    })?;
-
-    if !source.is_file() {
-        return Err(LoaderError::Other(
-            "Seçilen BIOS yolu bir dosya değil.".into(),
-        ));
-    }
-
-    let metadata = fs::metadata(&source).map_err(|error| {
-        LoaderError::Other(format!(
-            "BIOS dosyası okunamadı: {error}"
-        ))
-    })?;
-
-    // Güncel PCSX2, otomatik BIOS taramasında 4 MiB ile 8 MiB
-    // arasındaki BIOS görüntülerini aday olarak kabul eder.
-    if metadata.len() < PS2_MIN_BIOS_SIZE
-        || metadata.len() > PS2_MAX_BIOS_SIZE
-    {
-        return Err(LoaderError::Other(format!(
-            "Geçersiz PS2 BIOS boyutu. Seçilen dosya {} bayt. Beklenen aralık 4–8 MiB.",
-            metadata.len()
-        )));
-    }
-
+fn prepare_pcsx2_bios_directory(
+) -> Result<PathBuf, LoaderError> {
     let managed_root =
         emulator_managed_directory(PsPlatform::Ps2)?;
 
@@ -1351,7 +1305,6 @@ async fn install_ps2_bios(
     })?;
 
     // PCSX2 portable kurulumunda veri klasörlerini exe'nin yanında tutar.
-    // Otomatik PCSX2 kurulumunu eklediğimizde aynı klasör korunacak.
     fs::write(
         managed_root.join("portable.txt"),
         b"",
@@ -1362,7 +1315,8 @@ async fn install_ps2_bios(
         ))
     })?;
 
-    let bios_directory = managed_root.join("bios");
+    let bios_directory =
+        managed_root.join("bios");
 
     fs::create_dir_all(&bios_directory).map_err(|error| {
         LoaderError::Other(format!(
@@ -1370,16 +1324,80 @@ async fn install_ps2_bios(
         ))
     })?;
 
+    Ok(bios_directory)
+}
+
+fn ps2_main_bios_extension(
+    path: &Path,
+) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .as_str(),
+        "bin" | "rom" | "rom0"
+    )
+}
+
+fn ps2_zip_member_supported(
+    path: &Path,
+) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .as_str(),
+        "bin"
+            | "rom"
+            | "rom0"
+            | "rom1"
+            | "rom2"
+            | "erom"
+            | "nvm"
+            | "mec"
+            | "inf"
+    )
+}
+
+fn copy_single_ps2_bios(
+    source: &Path,
+    bios_directory: &Path,
+) -> Result<PathBuf, LoaderError> {
+    let metadata = fs::metadata(source).map_err(|error| {
+        LoaderError::Other(format!(
+            "BIOS dosyası okunamadı: {error}"
+        ))
+    })?;
+
+    if !ps2_main_bios_extension(source) {
+        return Err(LoaderError::Other(
+            "PS2 BIOS için .bin, .rom, .rom0 veya desteklenen BIOS ZIP dosyası seçmelisin."
+                .into(),
+        ));
+    }
+
+    if metadata.len() < PS2_MIN_BIOS_SIZE
+        || metadata.len() > PS2_MAX_BIOS_SIZE
+    {
+        return Err(LoaderError::Other(format!(
+            "Geçersiz PS2 BIOS boyutu. Seçilen dosya {} bayt. Ana BIOS için beklenen aralık 4–8 MiB.",
+            metadata.len()
+        )));
+    }
+
     let file_name = source.file_name().ok_or_else(|| {
         LoaderError::Other(
             "BIOS dosya adı okunamadı.".into(),
         )
     })?;
 
-    let destination = bios_directory.join(file_name);
+    let destination =
+        bios_directory.join(file_name);
 
     let source_canonical =
-        source.canonicalize().unwrap_or(source.clone());
+        source.canonicalize().unwrap_or_else(|_| source.to_path_buf());
 
     let destination_canonical =
         destination.canonicalize().ok();
@@ -1389,22 +1407,330 @@ async fn install_ps2_bios(
         .map(|path| path != &source_canonical)
         .unwrap_or(true)
     {
-        fs::copy(
-            &source,
-            &destination,
-        )
-        .map_err(|error| {
+        fs::copy(source, &destination).map_err(|error| {
             LoaderError::Other(format!(
                 "BIOS PCSX2 klasörüne kopyalanamadı: {error}"
             ))
         })?;
     }
 
+    Ok(destination)
+}
+
+fn extract_ps2_bios_zip(
+    source: &Path,
+    bios_directory: &Path,
+) -> Result<PathBuf, LoaderError> {
+    let archive_metadata =
+        fs::metadata(source).map_err(|error| {
+            LoaderError::Other(format!(
+                "PS2 BIOS ZIP dosyası okunamadı: {error}"
+            ))
+        })?;
+
+    if archive_metadata.len() > PS2_MAX_BIOS_ZIP_SIZE {
+        return Err(LoaderError::Other(format!(
+            "PS2 BIOS ZIP dosyası çok büyük. Üst sınır {} MiB.",
+            PS2_MAX_BIOS_ZIP_SIZE / 1024 / 1024
+        )));
+    }
+
+    let file = fs::File::open(source).map_err(|error| {
+        LoaderError::Other(format!(
+            "PS2 BIOS ZIP dosyası açılamadı: {error}"
+        ))
+    })?;
+
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|error| {
+            LoaderError::Other(format!(
+                "PS2 BIOS ZIP arşivi okunamadı: {error}"
+            ))
+        })?;
+
+    if archive.len() > PS2_MAX_BIOS_ZIP_ENTRIES {
+        return Err(LoaderError::Other(format!(
+            "PS2 BIOS ZIP arşivinde çok fazla dosya var. Üst sınır {PS2_MAX_BIOS_ZIP_ENTRIES}."
+        )));
+    }
+
+    let mut accepted = Vec::<(usize, String, u64, bool)>::new();
+    let mut main_candidates =
+        Vec::<(usize, String, u64)>::new();
+    let mut total_uncompressed = 0u64;
+    let mut names =
+        std::collections::HashSet::<String>::new();
+
+    // İlk tur: hiçbir şey yazmadan arşivi doğrula.
+    for index in 0..archive.len() {
+        let entry =
+            archive.by_index(index).map_err(|error| {
+                LoaderError::Other(format!(
+                    "PS2 BIOS ZIP girdisi okunamadı: {error}"
+                ))
+            })?;
+
+        if entry.is_dir() {
+            continue;
+        }
+
+        let relative =
+            entry.enclosed_name().ok_or_else(|| {
+                LoaderError::Other(
+                    "PS2 BIOS ZIP arşivinde güvensiz dosya yolu bulundu."
+                        .into(),
+                )
+            })?;
+
+        if !ps2_zip_member_supported(relative) {
+            continue;
+        }
+
+        let file_name = relative
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| {
+                LoaderError::Other(
+                    "PS2 BIOS ZIP arşivinde geçersiz dosya adı bulundu."
+                        .into(),
+                )
+            })?
+            .to_string();
+
+        let normalized =
+            file_name.to_ascii_lowercase();
+
+        if !names.insert(normalized) {
+            return Err(LoaderError::Other(format!(
+                "PS2 BIOS ZIP arşivinde aynı isimli birden fazla dosya var: {file_name}"
+            )));
+        }
+
+        let size = entry.size();
+
+        total_uncompressed =
+            total_uncompressed
+                .checked_add(size)
+                .ok_or_else(|| {
+                    LoaderError::Other(
+                        "PS2 BIOS ZIP boyutu hesaplanamadı."
+                            .into(),
+                    )
+                })?;
+
+        if total_uncompressed
+            > PS2_MAX_EXTRACTED_BIOS_BYTES
+        {
+            return Err(LoaderError::Other(format!(
+                "PS2 BIOS ZIP açılmış içerik boyutu çok büyük. Üst sınır {} MiB.",
+                PS2_MAX_EXTRACTED_BIOS_BYTES / 1024 / 1024
+            )));
+        }
+
+        let is_main =
+            ps2_main_bios_extension(relative)
+                && size >= PS2_MIN_BIOS_SIZE
+                && size <= PS2_MAX_BIOS_SIZE;
+
+        if is_main {
+            main_candidates.push((
+                index,
+                file_name.clone(),
+                size,
+            ));
+        }
+
+        accepted.push((
+            index,
+            file_name,
+            size,
+            is_main,
+        ));
+    }
+
+    if main_candidates.is_empty() {
+        return Err(LoaderError::Other(
+            "ZIP içinde geçerli ana PS2 BIOS bulunamadı. Arşivde 4–8 MiB boyutunda .ROM0, .BIN veya .ROM ana BIOS bulunmalı."
+                .into(),
+        ));
+    }
+
+    // ROM0 varsa onu ana BIOS olarak tercih et.
+    // Yoksa tek bir BIN/ROM adayına izin ver.
+    let rom0_candidates = main_candidates
+        .iter()
+        .filter(|(_, name, _)| {
+            Path::new(name)
+                .extension()
+                .and_then(|value| value.to_str())
+                .map(|value| value.eq_ignore_ascii_case("rom0"))
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+
+    let selected_main_index =
+        if rom0_candidates.len() == 1 {
+            rom0_candidates[0].0
+        } else if rom0_candidates.len() > 1 {
+            return Err(LoaderError::Other(
+                "ZIP içinde birden fazla ROM0 ana BIOS bulundu. Hangi BIOS'un kullanılacağı belirsiz."
+                    .into(),
+            ));
+        } else if main_candidates.len() == 1 {
+            main_candidates[0].0
+        } else {
+            return Err(LoaderError::Other(
+                "ZIP içinde birden fazla ana PS2 BIOS adayı bulundu. Tek bir BIOS seti içeren ZIP seçmelisin."
+                    .into(),
+            ));
+        };
+
+    let mut main_destination = None;
+
+    // İkinci tur: sadece doğrulanmış BIOS seti dosyalarını PCSX2/bios'a çıkar.
+    for (
+        index,
+        file_name,
+        _size,
+        _is_main,
+    ) in accepted
+    {
+        let mut entry =
+            archive.by_index(index).map_err(|error| {
+                LoaderError::Other(format!(
+                    "PS2 BIOS ZIP girdisi yeniden açılamadı: {error}"
+                ))
+            })?;
+
+        let destination =
+            bios_directory.join(&file_name);
+
+        let mut output =
+            fs::File::create(&destination).map_err(|error| {
+                LoaderError::Other(format!(
+                    "PS2 BIOS dosyası oluşturulamadı: {error}"
+                ))
+            })?;
+
+        std::io::copy(
+            &mut entry,
+            &mut output,
+        )
+        .map_err(|error| {
+            LoaderError::Other(format!(
+                "PS2 BIOS ZIP dosyası çıkarılamadı: {error}"
+            ))
+        })?;
+
+        output.sync_all().map_err(|error| {
+            LoaderError::Other(format!(
+                "PS2 BIOS dosyası diske yazılamadı: {error}"
+            ))
+        })?;
+
+        if index == selected_main_index {
+            main_destination =
+                Some(destination);
+        }
+    }
+
+    let main_destination =
+        main_destination.ok_or_else(|| {
+            LoaderError::Other(
+                "Ana PS2 BIOS ZIP içinden çıkarılamadı."
+                    .into(),
+            )
+        })?;
+
+    let main_size =
+        fs::metadata(&main_destination)
+            .map_err(|error| {
+                LoaderError::Other(format!(
+                    "Çıkarılan ana PS2 BIOS doğrulanamadı: {error}"
+                ))
+            })?
+            .len();
+
+    if main_size < PS2_MIN_BIOS_SIZE
+        || main_size > PS2_MAX_BIOS_SIZE
+    {
+        let _ =
+            fs::remove_file(&main_destination);
+
+        return Err(LoaderError::Other(format!(
+            "Çıkarılan ana PS2 BIOS boyutu geçersiz: {main_size} bayt."
+        )));
+    }
+
+    Ok(main_destination)
+}
+
+/// Kullanıcının kendi PS2 cihazından dump ettiği BIOS'u veya BIOS ZIP setini
+/// seçer ve Animus'un yönettiği PCSX2/bios klasörüne kopyalar.
+/// ZIP içinde ROM0/ROM1/NVM/MEC gibi standart dump seti dosyaları desteklenir.
+/// Animus herhangi bir Sony BIOS indirmez veya dağıtmaz.
+#[tauri::command]
+async fn install_ps2_bios(
+    app: AppHandle,
+) -> Result<Option<String>, LoaderError> {
+    let selected = app
+        .dialog()
+        .file()
+        .add_filter(
+            "PlayStation 2 BIOS / BIOS ZIP",
+            &[
+                "zip",
+                "bin",
+                "rom",
+                "rom0",
+            ],
+        )
+        .blocking_pick_file();
+
+    let Some(selected) = selected else {
+        return Ok(None);
+    };
+
+    let source =
+        selected.into_path().map_err(|error| {
+            LoaderError::Other(format!(
+                "Seçilen BIOS dosyasının yolu okunamadı: {error}"
+            ))
+        })?;
+
+    if !source.is_file() {
+        return Err(LoaderError::Other(
+            "Seçilen BIOS yolu bir dosya değil.".into(),
+        ));
+    }
+
+    let bios_directory =
+        prepare_pcsx2_bios_directory()?;
+
+    let extension = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    let destination =
+        if extension == "zip" {
+            extract_ps2_bios_zip(
+                &source,
+                &bios_directory,
+            )?
+        } else {
+            copy_single_ps2_bios(
+                &source,
+                &bios_directory,
+            )?
+        };
+
     let _ = logging::event(
         "info",
         "emulator",
         &format!(
-            "Kullanıcı PS2 BIOS dosyasını Animus PCSX2 klasörüne ekledi: {}",
+            "Kullanıcı PS2 BIOS setini Animus PCSX2 klasörüne ekledi. Ana BIOS: {}",
             destination.display()
         ),
     );
