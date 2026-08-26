@@ -963,6 +963,505 @@ fn install_duckstation_automatically(
 }
 
 
+// ============================================================
+// PCSX2 AUTOMATIC INSTALL
+// ============================================================
+
+// Kararlı PCSX2 sürümü resmî PCSX2 GitHub Releases API'sinden alınır.
+// Windows Qt x64 portable 7z paketi seçilir ve GitHub'ın asset digest'i ile
+// SHA-256 doğrulanır. Sony BIOS bu indirmeye dahil değildir.
+const PCSX2_RELEASE_API: &str =
+    "https://api.github.com/repos/PCSX2/pcsx2/releases/latest";
+const PCSX2_WINDOWS_ASSET_SUFFIX: &str =
+    "-windows-x64-Qt.7z";
+const PCSX2_MAX_ARCHIVE_BYTES: u64 =
+    128 * 1024 * 1024;
+
+fn pcsx2_latest_asset(
+    client: &reqwest::blocking::Client,
+) -> Result<(String, String, String), LoaderError> {
+    let response = client
+        .get(PCSX2_RELEASE_API)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .and_then(|response| response.error_for_status())
+        .map_err(|error| {
+            LoaderError::Other(format!(
+                "PCSX2 sürüm bilgisi alınamadı: {error}"
+            ))
+        })?;
+
+    let body = response.text().map_err(|error| {
+        LoaderError::Other(format!(
+            "PCSX2 sürüm yanıtı okunamadı: {error}"
+        ))
+    })?;
+
+    let release: serde_json::Value =
+        serde_json::from_str(&body).map_err(|error| {
+            LoaderError::Other(format!(
+                "PCSX2 sürüm bilgisi JSON olarak çözümlenemedi: {error}"
+            ))
+        })?;
+
+    let tag = release
+        .get("tag_name")
+        .and_then(|value| value.as_str())
+        .unwrap_or("latest")
+        .to_string();
+
+    let assets = release
+        .get("assets")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| {
+            LoaderError::Other(
+                "PCSX2 yayın dosyaları bulunamadı.".into(),
+            )
+        })?;
+
+    let suffix =
+        PCSX2_WINDOWS_ASSET_SUFFIX.to_ascii_lowercase();
+
+    let asset = assets
+        .iter()
+        .find(|asset| {
+            let Some(name) = asset
+                .get("name")
+                .and_then(|value| value.as_str())
+            else {
+                return false;
+            };
+
+            let lower = name.to_ascii_lowercase();
+
+            lower.ends_with(suffix.as_str())
+                && !lower.contains("symbols")
+        })
+        .ok_or_else(|| {
+            LoaderError::Other(format!(
+                "Resmî PCSX2 Windows portable paketi bulunamadı: *{PCSX2_WINDOWS_ASSET_SUFFIX}"
+            ))
+        })?;
+
+    let url = asset
+        .get("browser_download_url")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| {
+            LoaderError::Other(
+                "PCSX2 indirme adresi bulunamadı.".into(),
+            )
+        })?
+        .to_string();
+
+    let digest = asset
+        .get("digest")
+        .and_then(|value| value.as_str())
+        .and_then(|value| value.strip_prefix("sha256:"))
+        .filter(|value| {
+            value.len() == 64
+                && value
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit())
+        })
+        .ok_or_else(|| {
+            LoaderError::Other(
+                "PCSX2 GitHub yayını SHA-256 digest bilgisi içermiyor; güvenli otomatik kurulum durduruldu."
+                    .into(),
+            )
+        })?
+        .to_ascii_lowercase();
+
+    Ok((url, digest, tag))
+}
+
+fn pcsx2_executable_in(
+    root: &Path,
+) -> Option<PathBuf> {
+    // Güncel resmî Qt paketi.
+    for name in [
+        "pcsx2-qt.exe",
+        "pcsx2-qtx64-avx2.exe",
+        "pcsx2.exe",
+    ] {
+        let candidate = root.join(name);
+
+        if emulator_executable_valid(
+            PsPlatform::Ps2,
+            &candidate,
+        ) {
+            return Some(candidate);
+        }
+    }
+
+    // Asset yapısı ileride tek bir üst klasör kazanırsa da çalışsın.
+    WalkDir::new(root)
+        .max_depth(3)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(Result::ok)
+        .map(|entry| entry.into_path())
+        .find(|path| {
+            path.extension()
+                .and_then(|value| value.to_str())
+                .map(|value| value.eq_ignore_ascii_case("exe"))
+                .unwrap_or(false)
+                && emulator_executable_valid(
+                    PsPlatform::Ps2,
+                    path,
+                )
+        })
+}
+
+fn copy_directory_contents(
+    source: &Path,
+    destination: &Path,
+) -> Result<(), LoaderError> {
+    if !source.is_dir() {
+        return Ok(());
+    }
+
+    fs::create_dir_all(destination).map_err(|error| {
+        LoaderError::Other(format!(
+            "PCSX2 kullanıcı verisi klasörü oluşturulamadı: {error}"
+        ))
+    })?;
+
+    for entry in WalkDir::new(source)
+        .follow_links(false)
+        .into_iter()
+    {
+        let entry = entry.map_err(|error| {
+            LoaderError::Other(format!(
+                "PCSX2 kullanıcı verisi okunamadı: {error}"
+            ))
+        })?;
+
+        let path = entry.path();
+
+        if path == source {
+            continue;
+        }
+
+        let relative = path
+            .strip_prefix(source)
+            .map_err(|error| {
+                LoaderError::Other(format!(
+                    "PCSX2 kullanıcı verisi yolu çözümlenemedi: {error}"
+                ))
+            })?;
+
+        let target = destination.join(relative);
+
+        if entry.file_type().is_dir() {
+            fs::create_dir_all(&target).map_err(|error| {
+                LoaderError::Other(format!(
+                    "PCSX2 kullanıcı verisi alt klasörü oluşturulamadı: {error}"
+                ))
+            })?;
+        } else if entry.file_type().is_file() {
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent).map_err(|error| {
+                    LoaderError::Other(format!(
+                        "PCSX2 kullanıcı verisi hedef klasörü oluşturulamadı: {error}"
+                    ))
+                })?;
+            }
+
+            fs::copy(path, &target).map_err(|error| {
+                LoaderError::Other(format!(
+                    "PCSX2 kullanıcı verisi korunamadı: {error}"
+                ))
+            })?;
+        }
+    }
+
+    Ok(())
+}
+
+fn existing_managed_pcsx2_bios_directory(
+    root: &Path,
+) -> Option<PathBuf> {
+    let direct = root.join("bios");
+
+    if direct.is_dir() {
+        return Some(direct);
+    }
+
+    WalkDir::new(root)
+        .max_depth(3)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_dir())
+        .map(|entry| entry.into_path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|value| value.to_str())
+                .map(|value| value.eq_ignore_ascii_case("bios"))
+                .unwrap_or(false)
+        })
+}
+
+fn install_pcsx2_automatically(
+) -> Result<PathBuf, LoaderError> {
+    let client = github_client()?;
+
+    let (
+        download_url,
+        expected_sha256,
+        release_tag,
+    ) = pcsx2_latest_asset(&client)?;
+
+    let target =
+        emulator_managed_directory(PsPlatform::Ps2)?;
+
+    let parent = target.parent().ok_or_else(|| {
+        LoaderError::Other(
+            "Animus emülatör üst klasörü bulunamadı.".into(),
+        )
+    })?;
+
+    let archive_path =
+        parent.join("pcsx2-download.7z");
+
+    let staging =
+        parent.join("pcsx2-installing");
+
+    let previous =
+        parent.join("pcsx2-previous");
+
+    let mut response = client
+        .get(&download_url)
+        .send()
+        .and_then(|response| response.error_for_status())
+        .map_err(|error| {
+            LoaderError::Other(format!(
+                "PCSX2 otomatik indirilemedi: {error}"
+            ))
+        })?;
+
+    if let Some(length) = response.content_length() {
+        if length == 0
+            || length > PCSX2_MAX_ARCHIVE_BYTES
+        {
+            return Err(LoaderError::Other(format!(
+                "PCSX2 indirme boyutu beklenmeyen değerde: {length} bayt."
+            )));
+        }
+    }
+
+    let mut archive_file =
+        fs::File::create(&archive_path)
+            .map_err(|error| {
+                LoaderError::Other(format!(
+                    "PCSX2 indirme dosyası oluşturulamadı: {error}"
+                ))
+            })?;
+
+    let downloaded =
+        std::io::copy(
+            &mut response,
+            &mut archive_file,
+        )
+        .map_err(|error| {
+            LoaderError::Other(format!(
+                "PCSX2 indirilemedi: {error}"
+            ))
+        })?;
+
+    drop(archive_file);
+
+    if downloaded == 0
+        || downloaded > PCSX2_MAX_ARCHIVE_BYTES
+    {
+        let _ =
+            fs::remove_file(&archive_path);
+
+        return Err(LoaderError::Other(format!(
+            "PCSX2 indirme boyutu geçersiz: {downloaded} bayt."
+        )));
+    }
+
+    let actual_sha256 =
+        crate::storage::hash_file(&archive_path)?;
+
+    if !actual_sha256
+        .eq_ignore_ascii_case(&expected_sha256)
+    {
+        let _ =
+            fs::remove_file(&archive_path);
+
+        return Err(LoaderError::Integrity(
+            format!(
+                "PCSX2 indirmesi bütünlük kontrolünden geçemedi. Beklenen SHA-256: {expected_sha256}, bulunan: {actual_sha256}"
+            ),
+        ));
+    }
+
+    if staging.exists() {
+        fs::remove_dir_all(&staging)
+            .map_err(|error| {
+                LoaderError::Other(format!(
+                    "Eski PCSX2 geçici klasörü temizlenemedi: {error}"
+                ))
+            })?;
+    }
+
+    fs::create_dir_all(&staging)
+        .map_err(|error| {
+            LoaderError::Other(format!(
+                "PCSX2 geçici klasörü oluşturulamadı: {error}"
+            ))
+        })?;
+
+    sevenz_rust::decompress_file(
+        &archive_path,
+        &staging,
+    )
+    .map_err(|error| {
+        LoaderError::Other(format!(
+            "PCSX2 7z paketi çıkarılamadı: {error}"
+        ))
+    })?;
+
+    let staged_executable =
+        pcsx2_executable_in(&staging)
+            .ok_or_else(|| {
+                LoaderError::Other(
+                    "İndirilen PCSX2 paketinde pcsx2-qt.exe bulunamadı."
+                        .into(),
+                )
+            })?;
+
+    let executable_relative =
+        staged_executable
+            .strip_prefix(&staging)
+            .map_err(|error| {
+                LoaderError::Other(format!(
+                    "PCSX2 çalıştırılabilir dosya yolu çözümlenemedi: {error}"
+                ))
+            })?
+            .to_path_buf();
+
+    let staged_portable_root =
+        staged_executable
+            .parent()
+            .ok_or_else(|| {
+                LoaderError::Other(
+                    "PCSX2 portable klasörü bulunamadı."
+                        .into(),
+                )
+            })?
+            .to_path_buf();
+
+    // Önceden BIOS EKLE ile hazırlanmış kullanıcının kendi BIOS setini
+    // yeni emülatör kurulumuna taşı. Sony BIOS asla indirilmez.
+    if let Some(existing_bios) =
+        existing_managed_pcsx2_bios_directory(
+            &target,
+        )
+    {
+        copy_directory_contents(
+            &existing_bios,
+            &staged_portable_root.join("bios"),
+        )?;
+    }
+
+    // PCSX2 verisini LocalAppData içindeki Animus klasöründe tut.
+    fs::write(
+        staged_portable_root.join("portable.txt"),
+        b"",
+    )
+    .map_err(|error| {
+        LoaderError::Other(format!(
+            "PCSX2 portable ayarı oluşturulamadı: {error}"
+        ))
+    })?;
+
+    // Atomik sayılabilecek değişim: eski klasörü önce yedek ada taşı.
+    // Yeni kurulum taşınamazsa eski klasör geri alınır.
+    if previous.exists() {
+        fs::remove_dir_all(&previous)
+            .map_err(|error| {
+                LoaderError::Other(format!(
+                    "Eski PCSX2 yedek klasörü temizlenemedi: {error}"
+                ))
+            })?;
+    }
+
+    if target.exists() {
+        fs::rename(
+            &target,
+            &previous,
+        )
+        .map_err(|error| {
+            LoaderError::Other(format!(
+                "Mevcut PCSX2 klasörü geçici olarak taşınamadı: {error}"
+            ))
+        })?;
+    }
+
+    if let Err(error) =
+        fs::rename(
+            &staging,
+            &target,
+        )
+    {
+        if previous.exists()
+            && !target.exists()
+        {
+            let _ =
+                fs::rename(
+                    &previous,
+                    &target,
+                );
+        }
+
+        return Err(LoaderError::Other(format!(
+            "PCSX2 kurulumu tamamlanamadı: {error}"
+        )));
+    }
+
+    if previous.exists() {
+        let _ =
+            fs::remove_dir_all(&previous);
+    }
+
+    let _ =
+        fs::remove_file(&archive_path);
+
+    let executable =
+        target.join(executable_relative);
+
+    if !emulator_executable_valid(
+        PsPlatform::Ps2,
+        &executable,
+    ) {
+        return Err(LoaderError::Other(
+            "PCSX2 indirildi ancak çalıştırılabilir dosya doğrulanamadı."
+                .into(),
+        ));
+    }
+
+    save_emulator_path(
+        PsPlatform::Ps2,
+        &executable,
+    )?;
+
+    let _ = logging::event(
+        "info",
+        "emulator",
+        &format!(
+            "PCSX2 {release_tag} resmî GitHub portable paketinden otomatik kuruldu: {}",
+            executable.display()
+        ),
+    );
+
+    Ok(executable)
+}
+
+
+
 
 // ============================================================
 // DUCKSTATION BIOS MANAGEMENT
@@ -1304,9 +1803,27 @@ fn prepare_pcsx2_bios_directory(
         ))
     })?;
 
-    // PCSX2 portable kurulumunda veri klasörlerini exe'nin yanında tutar.
+    // PCSX2 daha önce otomatik kurulmuşsa BIOS'u doğrudan exe'nin yanındaki
+    // portable veri köküne koy. Henüz kurulmadıysa managed_root/bios hazırlanır
+    // ve otomatik kurulum sırasında bu set korunarak doğru yere taşınır.
+    let portable_root =
+        pcsx2_executable_in(&managed_root)
+            .and_then(|path| {
+                path.parent()
+                    .map(Path::to_path_buf)
+            })
+            .unwrap_or_else(|| {
+                managed_root.clone()
+            });
+
+    fs::create_dir_all(&portable_root).map_err(|error| {
+        LoaderError::Other(format!(
+            "PCSX2 portable klasörü oluşturulamadı: {error}"
+        ))
+    })?;
+
     fs::write(
-        managed_root.join("portable.txt"),
+        portable_root.join("portable.txt"),
         b"",
     )
     .map_err(|error| {
@@ -1316,7 +1833,7 @@ fn prepare_pcsx2_bios_directory(
     })?;
 
     let bios_directory =
-        managed_root.join("bios");
+        portable_root.join("bios");
 
     fs::create_dir_all(&bios_directory).map_err(|error| {
         LoaderError::Other(format!(
@@ -1482,7 +1999,7 @@ fn extract_ps2_bios_zip(
                 )
             })?;
 
-        if !ps2_zip_member_supported(relative) {
+        if !ps2_zip_member_supported(&relative) {
             continue;
         }
 
@@ -1528,7 +2045,7 @@ fn extract_ps2_bios_zip(
         }
 
         let is_main =
-            ps2_main_bios_extension(relative)
+            ps2_main_bios_extension(&relative)
                 && size >= PS2_MIN_BIOS_SIZE
                 && size <= PS2_MAX_BIOS_SIZE;
 
@@ -1753,6 +2270,39 @@ fn find_or_select_emulator(
         return Ok(saved);
     }
 
+    // Kaydedilmiş yol silinmiş olsa bile Animus'un kendi managed kurulumunu
+    // tekrar indirmeden bul.
+    if let Ok(managed_root) =
+        emulator_managed_directory(platform)
+    {
+        let managed = match platform {
+            PsPlatform::Ps1 => {
+                duckstation_executable_in(
+                    &managed_root,
+                )
+            }
+            PsPlatform::Ps2 => {
+                pcsx2_executable_in(
+                    &managed_root,
+                )
+            }
+        };
+
+        if let Some(executable) = managed {
+            let canonical =
+                executable
+                    .canonicalize()
+                    .unwrap_or(executable);
+
+            save_emulator_path(
+                platform,
+                &canonical,
+            )?;
+
+            return Ok(canonical);
+        }
+    }
+
     // Animus resource klasoru ve sistemde kurulu yaygin konumlari ara.
     for candidate in emulator_candidates(app, platform) {
         if emulator_executable_valid(platform, &candidate) {
@@ -1770,15 +2320,15 @@ fn find_or_select_emulator(
     }
 
     match platform {
-        // PS1 icin artik kullaniciya EXE sectirmiyoruz.
-        // DuckStation resmî GitHub release paketinden otomatik indirilir.
-        PsPlatform::Ps1 => install_duckstation_automatically(),
+        // Kullanıcıya emulator EXE'si seçtirmiyoruz.
+        // İki emülatör de kendi resmî GitHub yayınından otomatik kurulur.
+        PsPlatform::Ps1 => {
+            install_duckstation_automatically()
+        }
 
-        // PS2 otomatik kurulumunu bir sonraki adimda PCSX2'nin 7z paketine
-        // guvenli extraction ekleyerek tamamlayacagiz.
-        PsPlatform::Ps2 => Err(LoaderError::Other(
-            "PCSX2 bulunamadı. Animus otomatik PCSX2 kurulumu henüz etkin değil.".into(),
-        )),
+        PsPlatform::Ps2 => {
+            install_pcsx2_automatically()
+        }
     }
 }
 
@@ -1804,6 +2354,29 @@ async fn launch_ps_game(
         &app,
         platform,
     )?;
+
+    if platform == PsPlatform::Ps1 {
+        ensure_bundled_ps1_openbios(
+            &app,
+            &emulator,
+        )?;
+    }
+
+    if platform == PsPlatform::Ps2
+        && !pcsx2_portable_bios_available(&emulator)
+    {
+        let installed_bios =
+            install_ps2_bios(app.clone()).await?;
+
+        if installed_bios.is_none()
+            || !pcsx2_portable_bios_available(&emulator)
+        {
+            return Err(LoaderError::Other(
+                "PS2 BIOS kurulamadı. Kendi PlayStation 2 BIOS ZIP/ROM setini seçmelisin."
+                    .into(),
+            ));
+        }
+    }
 
     let mut command = Command::new(&emulator);
 
@@ -2027,10 +2600,20 @@ async fn launch_installed_ps_game(
     if platform == PsPlatform::Ps2
         && !pcsx2_portable_bios_available(&emulator)
     {
-        return Err(LoaderError::Other(
-            "PS2 BIOS bulunamadı. Animus içindeki BIOS EKLE düğmesinden kendi PlayStation 2 cihazından dump ettiğin BIOS dosyasını ekle."
-                .into(),
-        ));
+        // PCSX2 Sony BIOS'u içermez. İlk çalıştırmada kullanıcıdan kendi
+        // PS2 dump ZIP/ROM setini seçmesini ister, Animus otomatik kurar
+        // ve sonraki çalıştırmalarda tekrar sormaz.
+        let installed_bios =
+            install_ps2_bios(app.clone()).await?;
+
+        if installed_bios.is_none()
+            || !pcsx2_portable_bios_available(&emulator)
+        {
+            return Err(LoaderError::Other(
+                "PS2 BIOS kurulamadı. Kendi PlayStation 2 cihazından dump ettiğin BIOS ZIP/ROM setini seçmelisin."
+                    .into(),
+            ));
+        }
     }
 
     let mut command = Command::new(&emulator);
