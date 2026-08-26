@@ -28,9 +28,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "resources": [
-      "resources/bios/ps1/"
-    ],
+    "resources": {
+      "resources/": ""
+    },
     "windows": {
       "certificateThumbprint": null,
       "digestAlgorithm": "sha256",
