@@ -68,6 +68,15 @@ export const api={
   async register(displayName:string,email:string,password:string){const result=await request<{user:User;token:string;message:string}>("/auth/register",{method:"POST",body:JSON.stringify({display_name:displayName,email,password})});await authSession.accept(result.token,true);await log("info","login","Kullanıcı kaydı ve güvenli otomatik giriş başarılı");return result.user},
   me:()=>request<User>("/auth/me"),
 
+  updateProfile:(displayName:string)=>request<User>("/profile",{method:"PATCH",body:JSON.stringify({display_name:displayName})}),
+  changePassword:(currentPassword:string,newPassword:string)=>request<{message:string}>("/profile/password",{method:"POST",body:JSON.stringify({current_password:currentPassword,new_password:newPassword})}),
+  uploadAvatar:(file:File)=>{
+    const form=new FormData();
+    form.set("avatar",file);
+    return request<User>("/profile/avatar",{method:"POST",body:form});
+  },
+  removeAvatar:()=>request<User>("/profile/avatar",{method:"DELETE"}),
+
   announcements:()=>request<CommunityAnnouncement[]>("/announcements"),
   chatMessages:()=>request<ChatMessage[]>("/chat/messages"),
   sendChat:(body:string)=>request<ChatMessage>("/chat/messages",{method:"POST",body:JSON.stringify({body})}),
