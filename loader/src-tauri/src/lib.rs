@@ -963,6 +963,358 @@ fn install_duckstation_automatically(
 }
 
 
+
+// ============================================================
+// DUCKSTATION BIOS MANAGEMENT
+// ============================================================
+
+const PS1_BIOS_SIZE: u64 = 0x80000;
+
+fn duckstation_portable_bios_directory(
+    emulator: &Path,
+) -> Option<PathBuf> {
+    let parent = emulator.parent()?;
+
+    // Animus'un otomatik kurduğu DuckStation portable modda çalışır.
+    if !parent.join("portable.txt").is_file() {
+        return None;
+    }
+
+    Some(parent.join("bios"))
+}
+
+fn duckstation_portable_bios_available(
+    emulator: &Path,
+) -> bool {
+    let Some(directory) =
+        duckstation_portable_bios_directory(emulator)
+    else {
+        // Harici / normal DuckStation kurulumunun veri dizinini Animus
+        // zorlamaz. BIOS kontrolünü DuckStation'a bırakır.
+        return true;
+    };
+
+    let Ok(entries) = fs::read_dir(directory) else {
+        return false;
+    };
+
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.metadata().ok())
+        .any(|metadata| metadata.is_file() && metadata.len() == PS1_BIOS_SIZE)
+}
+
+/// Kullanıcının kendi PS1 cihazından dump ettiği BIOS'u seçer ve
+/// Animus'un yönettiği portable DuckStation/bios klasörüne kopyalar.
+/// Animus herhangi bir BIOS indirmez veya dağıtmaz.
+#[tauri::command]
+async fn install_ps1_bios(
+    app: AppHandle,
+) -> Result<Option<String>, LoaderError> {
+    let selected = app
+        .dialog()
+        .file()
+        .add_filter(
+            "PlayStation 1 BIOS",
+            &["bin", "rom"],
+        )
+        .blocking_pick_file();
+
+    let Some(selected) = selected else {
+        return Ok(None);
+    };
+
+    let source = selected.into_path().map_err(|error| {
+        LoaderError::Other(format!(
+            "Seçilen BIOS dosyasının yolu okunamadı: {error}"
+        ))
+    })?;
+
+    if !source.is_file() {
+        return Err(LoaderError::Other(
+            "Seçilen BIOS yolu bir dosya değil.".into(),
+        ));
+    }
+
+    let metadata = fs::metadata(&source).map_err(|error| {
+        LoaderError::Other(format!(
+            "BIOS dosyası okunamadı: {error}"
+        ))
+    })?;
+
+    // DuckStation'ın PS1 BIOS boyutu 512 KiB'dir.
+    if metadata.len() != PS1_BIOS_SIZE {
+        return Err(LoaderError::Other(format!(
+            "Geçersiz PS1 BIOS boyutu. Seçilen dosya {} bayt, beklenen {} bayt (512 KiB).",
+            metadata.len(),
+            PS1_BIOS_SIZE
+        )));
+    }
+
+    // BIOS her zaman Animus'un yönettiği portable DuckStation'a kurulur.
+    // Böylece kullanıcıdan emülatör yolu seçmesi istenmez.
+    let managed_root =
+        emulator_managed_directory(PsPlatform::Ps1)?;
+
+    let emulator =
+        if let Some(existing) =
+            duckstation_executable_in(&managed_root)
+        {
+            existing
+        } else {
+            install_duckstation_automatically()?
+        };
+
+    let emulator = emulator
+        .canonicalize()
+        .unwrap_or(emulator);
+
+    let parent = emulator.parent().ok_or_else(|| {
+        LoaderError::Other(
+            "DuckStation klasörü bulunamadı.".into(),
+        )
+    })?;
+
+    // Otomatik kurulumdan kalmamışsa portable modu yeniden garanti et.
+    fs::write(
+        parent.join("portable.txt"),
+        b"",
+    )
+    .map_err(|error| {
+        LoaderError::Other(format!(
+            "DuckStation portable ayarı oluşturulamadı: {error}"
+        ))
+    })?;
+
+    let bios_directory = parent.join("bios");
+
+    fs::create_dir_all(&bios_directory).map_err(|error| {
+        LoaderError::Other(format!(
+            "DuckStation BIOS klasörü oluşturulamadı: {error}"
+        ))
+    })?;
+
+    let file_name = source.file_name().ok_or_else(|| {
+        LoaderError::Other(
+            "BIOS dosya adı okunamadı.".into(),
+        )
+    })?;
+
+    let destination = bios_directory.join(file_name);
+
+    let source_canonical =
+        source.canonicalize().unwrap_or(source.clone());
+
+    let destination_canonical =
+        destination.canonicalize().ok();
+
+    if destination_canonical
+        .as_ref()
+        .map(|path| path != &source_canonical)
+        .unwrap_or(true)
+    {
+        fs::copy(
+            &source,
+            &destination,
+        )
+        .map_err(|error| {
+            LoaderError::Other(format!(
+                "BIOS DuckStation klasörüne kopyalanamadı: {error}"
+            ))
+        })?;
+    }
+
+    save_emulator_path(
+        PsPlatform::Ps1,
+        &emulator,
+    )?;
+
+    let _ = logging::event(
+        "info",
+        "emulator",
+        &format!(
+            "Kullanıcı PS1 BIOS dosyasını Animus DuckStation klasörüne ekledi: {}",
+            destination.display()
+        ),
+    );
+
+    Ok(Some(
+        destination.display().to_string()
+    ))
+}
+
+
+// ============================================================
+// PCSX2 BIOS MANAGEMENT
+// ============================================================
+
+const PS2_MIN_BIOS_SIZE: u64 = 4 * 1024 * 1024;
+const PS2_MAX_BIOS_SIZE: u64 = 8 * 1024 * 1024;
+
+fn pcsx2_portable_bios_directory(
+    emulator: &Path,
+) -> Option<PathBuf> {
+    let parent = emulator.parent()?;
+
+    // Animus'un yönettiği PCSX2 kurulumu portable modda çalışacak.
+    // Harici PCSX2 kurulumlarının ayar dizinine Animus müdahale etmez.
+    if !parent.join("portable.txt").is_file()
+        && !parent.join("portable.ini").is_file()
+    {
+        return None;
+    }
+
+    Some(parent.join("bios"))
+}
+
+fn pcsx2_portable_bios_available(
+    emulator: &Path,
+) -> bool {
+    let Some(directory) =
+        pcsx2_portable_bios_directory(emulator)
+    else {
+        // Harici / normal PCSX2 kurulumunda BIOS denetimini PCSX2'ye bırak.
+        return true;
+    };
+
+    let Ok(entries) = fs::read_dir(directory) else {
+        return false;
+    };
+
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.metadata().ok())
+        .any(|metadata| {
+            metadata.is_file()
+                && metadata.len() >= PS2_MIN_BIOS_SIZE
+                && metadata.len() <= PS2_MAX_BIOS_SIZE
+        })
+}
+
+/// Kullanıcının kendi PS2 cihazından dump ettiği BIOS'u seçer ve
+/// Animus'un yönettiği PCSX2/bios klasörüne kopyalar.
+/// PCSX2 henüz otomatik kurulmamış olsa bile BIOS güvenli şekilde
+/// hazırlanır; daha sonra aynı yönetilen klasör kullanılacaktır.
+/// Animus herhangi bir BIOS indirmez veya dağıtmaz.
+#[tauri::command]
+async fn install_ps2_bios(
+    app: AppHandle,
+) -> Result<Option<String>, LoaderError> {
+    let selected = app
+        .dialog()
+        .file()
+        .add_filter(
+            "PlayStation 2 BIOS",
+            &["bin", "rom"],
+        )
+        .blocking_pick_file();
+
+    let Some(selected) = selected else {
+        return Ok(None);
+    };
+
+    let source = selected.into_path().map_err(|error| {
+        LoaderError::Other(format!(
+            "Seçilen BIOS dosyasının yolu okunamadı: {error}"
+        ))
+    })?;
+
+    if !source.is_file() {
+        return Err(LoaderError::Other(
+            "Seçilen BIOS yolu bir dosya değil.".into(),
+        ));
+    }
+
+    let metadata = fs::metadata(&source).map_err(|error| {
+        LoaderError::Other(format!(
+            "BIOS dosyası okunamadı: {error}"
+        ))
+    })?;
+
+    // Güncel PCSX2, otomatik BIOS taramasında 4 MiB ile 8 MiB
+    // arasındaki BIOS görüntülerini aday olarak kabul eder.
+    if metadata.len() < PS2_MIN_BIOS_SIZE
+        || metadata.len() > PS2_MAX_BIOS_SIZE
+    {
+        return Err(LoaderError::Other(format!(
+            "Geçersiz PS2 BIOS boyutu. Seçilen dosya {} bayt. Beklenen aralık 4–8 MiB.",
+            metadata.len()
+        )));
+    }
+
+    let managed_root =
+        emulator_managed_directory(PsPlatform::Ps2)?;
+
+    fs::create_dir_all(&managed_root).map_err(|error| {
+        LoaderError::Other(format!(
+            "PCSX2 klasörü oluşturulamadı: {error}"
+        ))
+    })?;
+
+    // PCSX2 portable kurulumunda veri klasörlerini exe'nin yanında tutar.
+    // Otomatik PCSX2 kurulumunu eklediğimizde aynı klasör korunacak.
+    fs::write(
+        managed_root.join("portable.txt"),
+        b"",
+    )
+    .map_err(|error| {
+        LoaderError::Other(format!(
+            "PCSX2 portable ayarı oluşturulamadı: {error}"
+        ))
+    })?;
+
+    let bios_directory = managed_root.join("bios");
+
+    fs::create_dir_all(&bios_directory).map_err(|error| {
+        LoaderError::Other(format!(
+            "PCSX2 BIOS klasörü oluşturulamadı: {error}"
+        ))
+    })?;
+
+    let file_name = source.file_name().ok_or_else(|| {
+        LoaderError::Other(
+            "BIOS dosya adı okunamadı.".into(),
+        )
+    })?;
+
+    let destination = bios_directory.join(file_name);
+
+    let source_canonical =
+        source.canonicalize().unwrap_or(source.clone());
+
+    let destination_canonical =
+        destination.canonicalize().ok();
+
+    if destination_canonical
+        .as_ref()
+        .map(|path| path != &source_canonical)
+        .unwrap_or(true)
+    {
+        fs::copy(
+            &source,
+            &destination,
+        )
+        .map_err(|error| {
+            LoaderError::Other(format!(
+                "BIOS PCSX2 klasörüne kopyalanamadı: {error}"
+            ))
+        })?;
+    }
+
+    let _ = logging::event(
+        "info",
+        "emulator",
+        &format!(
+            "Kullanıcı PS2 BIOS dosyasını Animus PCSX2 klasörüne ekledi: {}",
+            destination.display()
+        ),
+    );
+
+    Ok(Some(
+        destination.display().to_string()
+    ))
+}
+
 // ============================================================
 // FIND EMULATOR
 // ============================================================
@@ -1232,6 +1584,24 @@ async fn launch_installed_ps_game(
         &app,
         platform,
     )?;
+
+    if platform == PsPlatform::Ps1
+        && !duckstation_portable_bios_available(&emulator)
+    {
+        return Err(LoaderError::Other(
+            "PS1 BIOS bulunamadı. Animus içindeki BIOS EKLE düğmesinden kendi PlayStation 1 cihazından dump ettiğin 512 KiB BIOS dosyasını ekle."
+                .into(),
+        ));
+    }
+
+    if platform == PsPlatform::Ps2
+        && !pcsx2_portable_bios_available(&emulator)
+    {
+        return Err(LoaderError::Other(
+            "PS2 BIOS bulunamadı. Animus içindeki BIOS EKLE düğmesinden kendi PlayStation 2 cihazından dump ettiğin BIOS dosyasını ekle."
+                .into(),
+        ));
+    }
 
     let mut command = Command::new(&emulator);
 
@@ -1670,6 +2040,8 @@ pub fn run() {
                 // Animus Emu
                 select_ps_game_file,
                 launch_ps_game,
+                install_ps1_bios,
+                install_ps2_bios,
                 prepare_ps_game_root,
                 launch_installed_ps_game
             ]
