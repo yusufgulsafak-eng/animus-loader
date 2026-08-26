@@ -435,6 +435,147 @@ pub fn install(
     Ok(installation)
 }
 
+fn is_playstation_disc_image(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .as_str(),
+        "iso" | "chd" | "cso" | "cue" | "bin" | "img" | "mdf" | "pbp"
+    )
+}
+
+/// MediaFire/ZIP tarafında özellikle Türkçe karakterli büyük oyun imajlarının
+/// dosya adı ZIP code-page farkı yüzünden manifestteki adla birebir
+/// eşleşmeyebilir. Önce tam yolu kullanırız. Tam yol yoksa yalnızca
+/// PlayStation disk-imajı uzantılarında kontrollü fallback uygularız.
+///
+/// Güvenlik:
+/// - Arşiv dışına çıkılmaz; yalnızca extract_safe ile açılmış kök taranır.
+/// - Aynı uzantıda birden fazla aday varsa, expected_sha256 varsa hash ile seçilir.
+/// - Hash yoksa yalnızca TEK aday olduğunda otomatik seçilir.
+/// - Belirsiz durumda tahmin yapılmaz ve kurulum durdurulur.
+fn resolve_archive_copy_source(
+    archive: &Path,
+    action: &Action,
+) -> Result<PathBuf> {
+    let source_rel = action.source.as_deref().ok_or_else(|| {
+        LoaderError::Manifest(format!(
+            "Action source eksik: {}",
+            action.id
+        ))
+    })?;
+
+    let exact = resolve_inside(archive, source_rel)?;
+
+    if exact.is_file() {
+        return Ok(exact);
+    }
+
+    let expected_path = Path::new(source_rel);
+
+    if !is_playstation_disc_image(expected_path) {
+        return Err(LoaderError::Manifest(format!(
+            "Archive source file yok: {source_rel}"
+        )));
+    }
+
+    let expected_extension = expected_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    let mut candidates = WalkDir::new(archive)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().is_file())
+        .map(|entry| entry.into_path())
+        .filter(|path| {
+            path.extension()
+                .and_then(|value| value.to_str())
+                .map(|value| value.eq_ignore_ascii_case(&expected_extension))
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+
+    if candidates.is_empty() {
+        return Err(LoaderError::Manifest(format!(
+            "Archive source file yok: {source_rel}. Arşiv içinde .{expected_extension} oyun imajı da bulunamadı."
+        )));
+    }
+
+    // Tek aday varsa büyük ISO'yu gereksiz yere ikinci kez hash'leme.
+    // Action sonucu zaten aşağıdaki normal bütünlük kontrolünde doğrulanacak.
+    if candidates.len() == 1 {
+        let selected = candidates.remove(0);
+
+        let _ = crate::logging::event(
+            "warning",
+            "install",
+            &format!(
+                "Manifest archive source adı eşleşmedi; tek .{expected_extension} PlayStation oyun imajı otomatik kullanılıyor. Beklenen: {source_rel}, bulunan: {}",
+                selected.display()
+            ),
+        );
+
+        return Ok(selected);
+    }
+
+    // Birden fazla aday varsa manifest hedef hash'ini kullanarak içerikle eşleştir.
+    // Bu, çok parçalı BIN setlerinde veya birden fazla disk imajında yanlış
+    // dosya seçilmesini önler.
+    if let Some(expected_hash) = action.expected_sha256.as_deref() {
+        let mut hash_matches = Vec::new();
+
+        for candidate in &candidates {
+            if hash_file(candidate)?
+                .eq_ignore_ascii_case(expected_hash)
+            {
+                hash_matches.push(candidate.clone());
+            }
+        }
+
+        if hash_matches.len() == 1 {
+            let selected = hash_matches.remove(0);
+
+            let _ = crate::logging::event(
+                "warning",
+                "install",
+                &format!(
+                    "Manifest archive source adı eşleşmedi; SHA-256 ile PlayStation oyun imajı bulundu. Beklenen: {source_rel}, bulunan: {}",
+                    selected.display()
+                ),
+            );
+
+            return Ok(selected);
+        }
+
+        if hash_matches.len() > 1 {
+            return Err(LoaderError::Manifest(format!(
+                "Archive source eşleşmesi belirsiz: {source_rel}. Aynı SHA-256 değerine sahip birden fazla .{expected_extension} dosyası bulundu."
+            )));
+        }
+    }
+
+    let names = candidates
+        .iter()
+        .filter_map(|path| {
+            path.strip_prefix(archive)
+                .ok()
+                .map(|relative| relative.display().to_string())
+        })
+        .take(8)
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    Err(LoaderError::Manifest(format!(
+        "Archive source eşleşmesi belirsiz: {source_rel}. Birden fazla .{expected_extension} dosyası bulundu: {names}"
+    )))
+}
+
 struct CopyHandler;
 impl PatchActionHandler for CopyHandler {
     fn supports(&self, a: &Action) -> bool {
@@ -451,14 +592,17 @@ impl PatchActionHandler for CopyHandler {
         backup: &Path,
         changes: &mut Vec<ChangeRecord>,
     ) -> Result<()> {
-        let source = resolve_inside(archive, a.source.as_deref().unwrap())?;
         if a.kind == ActionType::CopyDirectory {
+            let source =
+                resolve_inside(archive, a.source.as_deref().unwrap())?;
+
             if !source.is_dir() {
                 return Err(LoaderError::Manifest(format!(
                     "Archive source directory yok: {}",
                     a.source.as_deref().unwrap()
                 )));
             }
+
             for entry in WalkDir::new(&source)
                 .follow_links(false)
                 .into_iter()
@@ -481,15 +625,21 @@ impl PatchActionHandler for CopyHandler {
                 )?;
             }
         } else {
-            if !source.is_file() {
-                return Err(LoaderError::Manifest(format!(
-                    "Archive source file yok: {}",
-                    a.source.as_deref().unwrap()
-                )));
-            }
-            let destination = resolve_inside(game, &a.destination)?;
-            copy_one(&source, &destination, &a.destination, backup, changes)?;
+            let source =
+                resolve_archive_copy_source(archive, a)?;
+
+            let destination =
+                resolve_inside(game, &a.destination)?;
+
+            copy_one(
+                &source,
+                &destination,
+                &a.destination,
+                backup,
+                changes,
+            )?;
         }
+
         Ok(())
     }
 }
@@ -958,6 +1108,76 @@ mod tests {
             fs::read(game.join("Data/text.dat")).unwrap(),
             b"VANILLA",
             "v2 kaldirilinca vanilla'ya donmeli, v1'e degil"
+        );
+    }
+
+    #[test]
+    fn ps_disc_source_falls_back_when_zip_filename_differs() {
+        let temp = tempfile::tempdir().expect("temp");
+        let extracted = temp.path().join("extracted");
+        let game = temp.path().join("game");
+        let backup = temp.path().join("backup");
+
+        fs::create_dir_all(&extracted).unwrap();
+        fs::create_dir_all(&game).unwrap();
+        fs::create_dir_all(backup.join("files")).unwrap();
+
+        let actual = extracted.join("Resident Evil CVX-TR - ANIMUS CEViRi.iso");
+        fs::write(&actual, b"PS2 ISO TEST").unwrap();
+
+        let action = Action {
+            id: uuid::Uuid::new_v4().to_string(),
+            kind: ActionType::CopyFile,
+            source: Some("Resident Evil CVX-TR - ANIMUS ÇEVİRİ.iso".into()),
+            destination: "Resident Evil Code Veronica.iso".into(),
+            backup: true,
+            expected_sha256: Some(hash_file(&actual).unwrap()),
+            options: Default::default(),
+        };
+
+        let mut changes = Vec::new();
+
+        CopyHandler
+            .apply(
+                &action,
+                &extracted,
+                &game,
+                &backup,
+                &mut changes,
+            )
+            .expect("PS disc fallback");
+
+        assert_eq!(
+            fs::read(game.join("Resident Evil Code Veronica.iso")).unwrap(),
+            b"PS2 ISO TEST"
+        );
+    }
+
+    #[test]
+    fn ps_disc_source_does_not_guess_between_multiple_images_without_hash() {
+        let temp = tempfile::tempdir().expect("temp");
+        let extracted = temp.path().join("extracted");
+        fs::create_dir_all(&extracted).unwrap();
+        fs::write(extracted.join("disc-a.iso"), b"A").unwrap();
+        fs::write(extracted.join("disc-b.iso"), b"B").unwrap();
+
+        let action = Action {
+            id: uuid::Uuid::new_v4().to_string(),
+            kind: ActionType::CopyFile,
+            source: Some("missing-name.iso".into()),
+            destination: "game.iso".into(),
+            backup: true,
+            expected_sha256: None,
+            options: Default::default(),
+        };
+
+        let error =
+            resolve_archive_copy_source(&extracted, &action)
+                .expect_err("ambiguous images must fail");
+
+        assert!(
+            error.to_string().contains("belirsiz"),
+            "unexpected error: {error}"
         );
     }
 
