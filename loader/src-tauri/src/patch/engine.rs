@@ -22,6 +22,61 @@ use sysinfo::{Disks, System};
 use tauri::{AppHandle, Emitter};
 use walkdir::WalkDir;
 
+
+// ============================================================
+// ANIMUS MANAGED PLAYSTATION ROOT
+// ============================================================
+
+/// Bu iki kayit normal PC oyunu degil; MediaFire paketindeki oyun imaji
+/// Animus'un kendi yonettigi klasore kurulur.
+fn is_managed_ps_game(manifest: &Manifest) -> bool {
+    matches!(
+        manifest.game.slug.as_str(),
+        "silent-hill-1" | "resident-evil-code-veronica-2000"
+    )
+}
+
+/// PS oyunlari icin kullanicidan oyun klasoru istemeyiz.
+/// Yalnizca Animus'un bu oyun icin ayirdigi LocalAppData klasorune izin verilir.
+/// Diger tum oyunlarda mevcut klasik oyun-koku dogrulamasi aynen devam eder.
+fn validate_install_root(manifest: &Manifest, game_root: &Path) -> Result<()> {
+    if !is_managed_ps_game(manifest) {
+        return validate_root(game_root, &manifest.detection.required_files);
+    }
+
+    let local = dirs::data_local_dir().ok_or_else(|| {
+        LoaderError::Other("Windows LocalAppData klasoru bulunamadi.".into())
+    })?;
+
+    let expected = local
+        .join("AnimusPatchLoader")
+        .join("emulated-games")
+        .join(format!("game-{}", manifest.game.id));
+
+    // dry-run ve kurulumdan once klasorun gercekten var olmasini garanti eder.
+    fs::create_dir_all(&expected)?;
+
+    let actual = game_root.canonicalize().map_err(|error| {
+        LoaderError::Other(format!(
+            "Animus PlayStation oyun klasoru okunamadi: {error}"
+        ))
+    })?;
+
+    let expected = expected.canonicalize().map_err(|error| {
+        LoaderError::Other(format!(
+            "Animus PlayStation hedef klasoru okunamadi: {error}"
+        ))
+    })?;
+
+    if actual != expected {
+        return Err(LoaderError::Other(
+            "PlayStation oyunu yalnizca Animus'un yonettigi oyun klasorune kurulabilir.".into(),
+        ));
+    }
+
+    Ok(())
+}
+
 pub fn validate_manifest(manifest: &Manifest) -> Result<()> {
     if manifest.schema_version != 1 {
         return Err(LoaderError::Manifest(format!(
@@ -52,14 +107,32 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<()> {
             "Güvensiz backup/conflict politikası".into(),
         ));
     }
-    validate_relative(&manifest.detection.executable)?;
-    for file in manifest
-        .detection
-        .required_files
-        .iter()
-        .chain(manifest.detection.optional_files.iter())
-    {
-        validate_relative(file)?;
+    if is_managed_ps_game(manifest) {
+        // PS oyunlarinda Windows .exe / mevcut oyun klasoru zorunlu degildir.
+        // Dolu bir detection yolu varsa yine guvenlik kontrolunden gecir.
+        if !manifest.detection.executable.trim().is_empty() {
+            validate_relative(&manifest.detection.executable)?;
+        }
+        for file in manifest
+            .detection
+            .required_files
+            .iter()
+            .chain(manifest.detection.optional_files.iter())
+        {
+            if !file.trim().is_empty() {
+                validate_relative(file)?;
+            }
+        }
+    } else {
+        validate_relative(&manifest.detection.executable)?;
+        for file in manifest
+            .detection
+            .required_files
+            .iter()
+            .chain(manifest.detection.optional_files.iter())
+        {
+            validate_relative(file)?;
+        }
     }
     for action in &manifest.install_actions {
         uuid::Uuid::parse_str(&action.id)
@@ -118,7 +191,7 @@ pub fn ensure_loader_version(manifest: &Manifest, loader_version: &str) -> Resul
 
 pub fn dry_run(manifest: &Manifest, game_root: &Path) -> Result<DryRun> {
     validate_manifest(manifest)?;
-    validate_root(game_root, &manifest.detection.required_files)?;
+    validate_install_root(manifest, game_root)?;
     let mut result = DryRun {
         created_files: 0,
         changed_files: 0,
@@ -190,7 +263,7 @@ pub fn install(
 ) -> Result<Installation> {
     validate_manifest(manifest)?;
     ensure_loader_version(manifest, loader_version)?;
-    validate_root(game_root, &manifest.detection.required_files)?;
+    validate_install_root(manifest, game_root)?;
     assert_not_running(manifest.detection.process_name.as_deref())?;
     let plan = dry_run(manifest, game_root)?;
     ensure_disk_space(game_root, plan.estimated_disk_bytes)?;
