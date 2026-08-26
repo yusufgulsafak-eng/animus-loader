@@ -1,5 +1,6 @@
 import "./styles.css";
 import "./community.css";
+import "./profile.css";
 import "./admin/admin.css";
 import {invoke} from "@tauri-apps/api/core";
 import {api} from "./api/client";
@@ -44,6 +45,176 @@ async function openLink(url?:string|null,missing="Bağlantı henüz tanımlanmad
   try{await patchService.openExternal(absolute)}catch{notify("Bağlantı açılamadı: "+absolute,true)}
 }
 
+
+function userInitial(){
+  return (state.user?.display_name||state.user?.email||"A")
+    .trim()
+    .charAt(0)
+    .toLocaleUpperCase("tr-TR");
+}
+
+function avatarMarkup(className=""){
+  const path=state.user?.avatar_path;
+  if(path){
+    return `<span class="${className}"><img src="${escapeHtml(asset(path))}" alt="Profil fotoğrafı"></span>`;
+  }
+  return `<span class="${className}">${escapeHtml(userInitial())}</span>`;
+}
+
+function syncProfileHeader(){
+  const trigger=document.querySelector<HTMLButtonElement>("#profile-button");
+  if(trigger){
+    trigger.innerHTML=state.user?.avatar_path
+      ? `<img src="${escapeHtml(asset(state.user.avatar_path))}" alt="Profil fotoğrafı">`
+      : `<span>${escapeHtml(userInitial())}</span>`;
+  }
+
+  const name=document.querySelector<HTMLElement>("#header-profile-name");
+  if(name)name.textContent=state.user?.display_name||"";
+
+  const cardName=document.querySelector<HTMLElement>(".profile-card b");
+  if(cardName)cardName.textContent=state.user?.display_name||"";
+
+  const cardEmail=document.querySelector<HTMLElement>(".profile-card small");
+  if(cardEmail)cardEmail.textContent=state.user?.email||"";
+}
+
+function openProfileSettings(){
+  const modal=document.querySelector<HTMLElement>("#modal-root");
+  if(!modal||!state.user)return;
+
+  const avatar=state.user.avatar_path
+    ? `<img src="${escapeHtml(asset(state.user.avatar_path))}" alt="Profil fotoğrafı">`
+    : escapeHtml(userInitial());
+
+  modal.innerHTML=`<div class="modal-backdrop" id="profile-settings-backdrop"><section class="profile-settings" role="dialog" aria-modal="true" aria-label="Profil ayarları"><button class="modal-close" id="profile-settings-close">×</button><div class="profile-settings-head"><div class="profile-settings-avatar" id="profile-settings-avatar">${avatar}</div><div><span class="overline">HESAP AYARLARI</span><h2>${escapeHtml(state.user.display_name)}</h2><p>${escapeHtml(state.user.email)} · ${escapeHtml(state.user.role)}</p></div></div><div class="profile-settings-body"><section class="profile-panel"><h3>Profil fotoğrafı</h3><p>JPG, PNG veya WebP. En fazla 5 MB.</p><div class="profile-avatar-actions"><input id="profile-avatar-input" type="file" accept="image/jpeg,image/png,image/webp"><button id="profile-avatar-select" type="button">Fotoğraf Seç</button>${state.user.avatar_path?'<button class="danger" id="profile-avatar-remove" type="button">Fotoğrafı Kaldır</button>':""}</div><div class="profile-avatar-note" id="profile-avatar-note">Fotoğraf seçildiğinde otomatik olarak yüklenir.</div></section><section class="profile-panel"><h3>Profil bilgileri</h3><p>Loader içinde görünen adını buradan değiştirebilirsin.</p><form class="profile-form" id="profile-info-form"><label>Görünen ad<input id="profile-display-name" minlength="2" maxlength="100" value="${escapeHtml(state.user.display_name)}" required></label><label>E-posta<input value="${escapeHtml(state.user.email)}" readonly></label><div class="profile-form-actions"><button type="submit" id="profile-info-save">Profili Kaydet</button><span class="profile-save-note" id="profile-info-note"></span></div></form></section><section class="profile-panel"><h3>Şifre değiştir</h3><p>Yeni şifre en az 12 karakter; büyük harf, küçük harf ve sayı içermeli.</p><form class="profile-form" id="profile-password-form"><label>Mevcut şifre<input id="profile-current-password" type="password" autocomplete="current-password" required></label><label>Yeni şifre<input id="profile-new-password" type="password" minlength="12" autocomplete="new-password" required></label><label>Yeni şifre tekrar<input id="profile-new-password-confirm" type="password" minlength="12" autocomplete="new-password" required></label><div class="profile-form-actions"><button type="submit" id="profile-password-save">Şifreyi Değiştir</button><span class="profile-save-note" id="profile-password-note"></span></div></form></section></div></section></div>`;
+
+  const close=()=>{modal.innerHTML=""};
+  document.querySelector("#profile-settings-close")?.addEventListener("click",close);
+  document.querySelector("#profile-settings-backdrop")?.addEventListener("click",event=>{
+    if(event.target===event.currentTarget)close();
+  });
+
+  const avatarInput=document.querySelector<HTMLInputElement>("#profile-avatar-input")!;
+  document.querySelector("#profile-avatar-select")?.addEventListener("click",()=>avatarInput.click());
+
+  avatarInput.addEventListener("change",async()=>{
+    const file=avatarInput.files?.[0];
+    if(!file)return;
+
+    if(file.size>5*1024*1024){
+      notify("Profil fotoğrafı en fazla 5 MB olabilir.",true);
+      avatarInput.value="";
+      return;
+    }
+
+    const note=document.querySelector<HTMLElement>("#profile-avatar-note");
+    if(note)note.textContent="Fotoğraf yükleniyor…";
+
+    try{
+      state.user=await api.uploadAvatar(file);
+      syncProfileHeader();
+      if(note)note.textContent="Profil fotoğrafı güncellendi.";
+      const preview=document.querySelector<HTMLElement>("#profile-settings-avatar");
+      if(preview){
+        preview.innerHTML=state.user.avatar_path
+          ? `<img src="${escapeHtml(asset(state.user.avatar_path))}?v=${Date.now()}" alt="Profil fotoğrafı">`
+          : escapeHtml(userInitial());
+      }
+      document.querySelector("#profile-avatar-remove")?.remove();
+      const actions=document.querySelector<HTMLElement>(".profile-avatar-actions");
+      if(actions&&state.user.avatar_path){
+        const remove=document.createElement("button");
+        remove.id="profile-avatar-remove";
+        remove.type="button";
+        remove.className="danger";
+        remove.textContent="Fotoğrafı Kaldır";
+        actions.append(remove);
+        bindRemoveAvatar(remove);
+      }
+    }catch(error){
+      if(note)note.textContent="";
+      notify(error instanceof Error?error.message:"Profil fotoğrafı yüklenemedi.",true);
+    }finally{
+      avatarInput.value="";
+    }
+  });
+
+  const bindRemoveAvatar=(button:HTMLElement)=>{
+    button.addEventListener("click",async()=>{
+      if(!confirm("Profil fotoğrafı kaldırılsın mı?"))return;
+      const target=button as HTMLButtonElement;
+      target.disabled=true;
+      try{
+        state.user=await api.removeAvatar();
+        syncProfileHeader();
+        const preview=document.querySelector<HTMLElement>("#profile-settings-avatar");
+        if(preview)preview.textContent=userInitial();
+        button.remove();
+        const note=document.querySelector<HTMLElement>("#profile-avatar-note");
+        if(note)note.textContent="Profil fotoğrafı kaldırıldı.";
+      }catch(error){
+        target.disabled=false;
+        notify(error instanceof Error?error.message:"Profil fotoğrafı kaldırılamadı.",true);
+      }
+    });
+  };
+
+  const removeButton=document.querySelector<HTMLElement>("#profile-avatar-remove");
+  if(removeButton)bindRemoveAvatar(removeButton);
+
+  document.querySelector<HTMLFormElement>("#profile-info-form")!.addEventListener("submit",async event=>{
+    event.preventDefault();
+    const button=document.querySelector<HTMLButtonElement>("#profile-info-save")!;
+    const note=document.querySelector<HTMLElement>("#profile-info-note")!;
+    const displayName=document.querySelector<HTMLInputElement>("#profile-display-name")!.value.trim();
+    button.disabled=true;
+    note.textContent="Kaydediliyor…";
+    try{
+      state.user=await api.updateProfile(displayName);
+      syncProfileHeader();
+      note.textContent="Kaydedildi.";
+      const title=document.querySelector<HTMLElement>(".profile-settings-head h2");
+      if(title)title.textContent=state.user.display_name;
+    }catch(error){
+      note.textContent="";
+      notify(error instanceof Error?error.message:"Profil güncellenemedi.",true);
+    }finally{
+      button.disabled=false;
+    }
+  });
+
+  document.querySelector<HTMLFormElement>("#profile-password-form")!.addEventListener("submit",async event=>{
+    event.preventDefault();
+    const current=document.querySelector<HTMLInputElement>("#profile-current-password")!.value;
+    const next=document.querySelector<HTMLInputElement>("#profile-new-password")!.value;
+    const confirmPassword=document.querySelector<HTMLInputElement>("#profile-new-password-confirm")!.value;
+    const button=document.querySelector<HTMLButtonElement>("#profile-password-save")!;
+    const note=document.querySelector<HTMLElement>("#profile-password-note")!;
+
+    if(next!==confirmPassword){
+      notify("Yeni şifreler birbiriyle eşleşmiyor.",true);
+      return;
+    }
+
+    button.disabled=true;
+    note.textContent="Şifre değiştiriliyor…";
+
+    try{
+      const result=await api.changePassword(current,next);
+      note.textContent=result.message||"Şifre değiştirildi.";
+      document.querySelector<HTMLInputElement>("#profile-current-password")!.value="";
+      document.querySelector<HTMLInputElement>("#profile-new-password")!.value="";
+      document.querySelector<HTMLInputElement>("#profile-new-password-confirm")!.value="";
+    }catch(error){
+      note.textContent="";
+      notify(error instanceof Error?error.message:"Şifre değiştirilemedi.",true);
+    }finally{
+      button.disabled=false;
+    }
+  });
+}
+
 function fallbackConfig():LoaderConfig{return cache.readConfig()||{app_name:"Animus Türkçe Yama",accent_color:"#b7f34a",library_title:"Oyun Kütüphanesi",announcements:[]}}
 
 function loginView(error="",retry=false){
@@ -70,9 +241,10 @@ function registerView(error="",retry=false){
 function shell(){
   const config=state.config||fallbackConfig();document.documentElement.style.setProperty("--accent",config.accent_color||"#b7f34a");
   const subscription=state.user?.subscription;
-  app.innerHTML=`<div class="shell${state.update?" has-update":""}"><header><button class="brand nav-button" data-view="home">${logoMarkup(config)}${escapeHtml(config.app_name)}</button><nav><button class="nav-button active" data-view="home">Ana Sayfa</button><button class="nav-button" data-view="library">Kütüphane</button><button id="backup-nav">Yedekler</button><button class="nav-button" data-view="emulator">PS Oyun Emülatör</button><button class="nav-button" data-view="announcements">Duyurular</button><button class="nav-button" data-view="chat">Canlı Chat</button></nav><div class="user"><div><b>${escapeHtml(state.user?.display_name)}</b><small>${state.user?.premium?escapeHtml(subscription?.plan_name||"Premium"):"Ücretsiz"}${subscription?.ends_at?" · "+date(subscription.ends_at):""}</small></div><button id="logout">Çıkış</button></div></header>${state.update?`<div class="update-banner"><b>Yeni loader sürümü hazır: ${escapeHtml(state.update.version)}</b><span>Kurulu sürüm ${escapeHtml(state.update.currentVersion)}</span><button id="update-banner-action">Şimdi Güncelle</button></div>`:""}<main id="main-content"></main><aside class="rightbar"><section class="profile-card"><span>${state.user?.premium?"PREMIUM":"FREE"}</span><b>${escapeHtml(state.user?.display_name)}</b><small>${escapeHtml(state.user?.email)}</small></section><h3>Duyurular</h3><div id="announcements"></div><section class="translation-summary"><h3>Çeviri İlerlemeleri</h3><div id="translation-summary"></div></section><div class="support-card"><span>YARDIMA MI İHTİYACIN VAR?</span><b>Destek merkezine ulaş</b><button id="support-link">Destek →</button><div class="social-links" id="social-links" hidden></div></div><div class="loader-version">Loader v${escapeHtml(state.loaderVersion)}</div></aside></div><div id="modal-root"></div><div id="dev-panel"></div>`;
+  app.innerHTML=`<div class="shell${state.update?" has-update":""}"><header><button class="brand nav-button" data-view="home">${logoMarkup(config)}${escapeHtml(config.app_name)}</button><nav><button class="nav-button active" data-view="home">Ana Sayfa</button><button class="nav-button" data-view="library">Kütüphane</button><button id="backup-nav">Yedekler</button><button class="nav-button" data-view="emulator">PS Oyun Emülatör</button><button class="nav-button" data-view="announcements">Duyurular</button><button class="nav-button" data-view="chat">Canlı Chat</button></nav><div class="user"><div class="user-profile-copy"><b id="header-profile-name">${escapeHtml(state.user?.display_name)}</b><small>${state.user?.premium?escapeHtml(subscription?.plan_name||"Premium"):"Ücretsiz"}${subscription?.ends_at?" · "+date(subscription.ends_at):""}</small></div><button id="profile-button" class="profile-trigger" type="button" title="Profil ayarları">${state.user?.avatar_path?`<img src="${escapeHtml(asset(state.user.avatar_path))}" alt="Profil fotoğrafı">`:`<span>${escapeHtml(userInitial())}</span>`}</button><button id="logout">Çıkış</button></div></header>${state.update?`<div class="update-banner"><b>Yeni loader sürümü hazır: ${escapeHtml(state.update.version)}</b><span>Kurulu sürüm ${escapeHtml(state.update.currentVersion)}</span><button id="update-banner-action">Şimdi Güncelle</button></div>`:""}<main id="main-content"></main><aside class="rightbar"><section class="profile-card"><span>${state.user?.premium?"PREMIUM":"FREE"}</span><b>${escapeHtml(state.user?.display_name)}</b><small>${escapeHtml(state.user?.email)}</small></section><h3>Duyurular</h3><div id="announcements"></div><section class="translation-summary"><h3>Çeviri İlerlemeleri</h3><div id="translation-summary"></div></section><div class="support-card"><span>YARDIMA MI İHTİYACIN VAR?</span><b>Destek merkezine ulaş</b><button id="support-link">Destek →</button><div class="social-links" id="social-links" hidden></div></div><div class="loader-version">Loader v${escapeHtml(state.loaderVersion)}</div></aside></div><div id="modal-root"></div><div id="dev-panel"></div>`;
   if(canManage(state.user)){const button=document.createElement("button");button.className="nav-button";button.dataset.view="admin";button.textContent="Yönetim";document.querySelector(".shell nav")?.append(button)}
   mountBackgroundMedia(document.querySelector<HTMLElement>(".shell")!,config.branding?.library_background,asset,55);
+  document.querySelector("#profile-button")?.addEventListener("click",openProfileSettings);
   document.querySelector("#logout")!.addEventListener("click",async()=>{stopChatPolling();try{await api.logout()}catch{}state.user=null;state.selected=null;installations.clear();loginView()});
   document.querySelector("#backup-nav")!.addEventListener("click",showBackups);
   document.querySelector("#support-link")!.addEventListener("click",()=>void openLink(config.support_url,"Destek bağlantısı henüz tanımlanmadı."));
