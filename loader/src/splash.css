@@ -1,0 +1,214 @@
+:root {
+  background: #151517;
+  color-scheme: dark;
+}
+
+html,
+body {
+  margin: 0;
+  width: 100%;
+  min-width: 100%;
+  height: 100%;
+  min-height: 100%;
+  background: #151517;
+}
+
+body.splash-active {
+  overflow: hidden;
+}
+
+.startup-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 43%, rgba(120, 20, 12, 0.16) 0%, rgba(45, 16, 15, 0.08) 24%, rgba(21, 21, 23, 0) 52%),
+    linear-gradient(180deg, #1a1a1c 0%, #151517 100%);
+  opacity: 1;
+  visibility: visible;
+  pointer-events: all;
+  transition:
+    opacity 420ms ease,
+    visibility 420ms ease;
+}
+
+.startup-splash::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at center, transparent 30%, rgba(0, 0, 0, 0.13) 72%, rgba(0, 0, 0, 0.30) 100%);
+}
+
+.startup-splash.is-leaving {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.startup-splash-center {
+  position: absolute;
+  left: 50%;
+  top: 48%;
+  width: min(33vw, 430px);
+  aspect-ratio: 1 / 1;
+  transform: translate(-50%, -50%);
+  display: grid;
+  place-items: center;
+}
+
+.startup-splash-logo {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+  transform-origin: 50% 52%;
+  opacity: 0;
+
+  /*
+    Outlook benzeri davranış:
+    1) Logo açılışta hafif küçüklükten gelir.
+    2) Sonra çok yumuşak bir nefes/pulse hareketi yapar.
+    3) Kırmızı glow da aynı ritimde hafifçe canlanır.
+  */
+  animation:
+    animus-logo-intro 720ms cubic-bezier(0.16, 1, 0.3, 1) forwards,
+    animus-logo-breathe 2400ms ease-in-out 720ms infinite;
+  will-change: transform, opacity, filter;
+}
+
+.startup-splash-brand {
+  position: absolute;
+  left: 50%;
+  bottom: clamp(34px, 6.2vh, 68px);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  opacity: 0;
+  white-space: nowrap;
+  animation: animus-brand-in 620ms ease 420ms forwards;
+}
+
+.startup-splash-brand-logo {
+  width: 38px;
+  height: 38px;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+  filter: drop-shadow(0 0 7px rgba(255, 64, 32, 0.20));
+}
+
+.startup-splash-divider {
+  width: 1px;
+  height: 31px;
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.startup-splash-name {
+  color: rgba(242, 239, 238, 0.88);
+  font-family:
+    "Segoe UI Variable Text",
+    "Segoe UI",
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
+  font-size: 22px;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+  text-rendering: geometricPrecision;
+}
+
+@keyframes animus-logo-intro {
+  0% {
+    opacity: 0;
+    transform: translateY(7px) scale(0.86);
+    filter:
+      drop-shadow(0 0 0 rgba(255, 45, 20, 0))
+      brightness(0.82);
+  }
+
+  65% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter:
+      drop-shadow(0 0 17px rgba(255, 50, 24, 0.30))
+      brightness(1);
+  }
+}
+
+@keyframes animus-logo-breathe {
+  0%,
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter:
+      drop-shadow(0 0 15px rgba(255, 45, 20, 0.25))
+      brightness(1);
+  }
+
+  50% {
+    opacity: 1;
+    transform: translateY(-4px) scale(1.022);
+    filter:
+      drop-shadow(0 0 27px rgba(255, 52, 22, 0.43))
+      brightness(1.055);
+  }
+}
+
+@keyframes animus-brand-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 7px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+@media (max-width: 900px) {
+  .startup-splash-center {
+    width: min(45vw, 360px);
+  }
+
+  .startup-splash-name {
+    font-size: 19px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .startup-splash-logo {
+    animation: animus-logo-reduced 180ms ease forwards;
+  }
+
+  .startup-splash-brand {
+    animation: animus-brand-in 180ms ease forwards;
+  }
+
+  .startup-splash {
+    transition-duration: 120ms;
+  }
+}
+
+@keyframes animus-logo-reduced {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+    filter: drop-shadow(0 0 17px rgba(255, 50, 24, 0.30));
+  }
+}
