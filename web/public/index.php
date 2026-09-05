@@ -7,6 +7,7 @@ use App\Controllers\AdminController;
 use App\Controllers\ApiController;
 use App\Core\View;
 use App\Core\Csrf;
+use App\Core\RateLimiter;
 use App\Services\AuthService;
 use App\Services\PasswordResetService;
 
@@ -28,8 +29,55 @@ if(str_starts_with($path,'/api/'))(new ApiController())->handle($method,rtrim($p
 if(str_starts_with($path,'/admin'))(new AdminController())->handle($method,rtrim($path,'/')?:'/admin');
 $page=rtrim($path,'/')?:'/';
 $esc=static fn($value)=>htmlspecialchars((string)$value,ENT_QUOTES,'UTF-8');
-if($page==='/register'){if($method==='GET')View::render('register',['csrf'=>Csrf::token(),'esc'=>$esc]);if($method==='POST'){if(!Csrf::verify($_POST['_csrf']??null))\App\Core\Http::error('CSRF doğrulaması başarısız.',419);try{(new AuthService())->register((string)($_POST['email']??''),(string)($_POST['display_name']??''),(string)($_POST['password']??''));View::render('register',['csrf'=>Csrf::token(),'esc'=>$esc,'message'=>'Hesap oluşturuldu. Loader üzerinden giriş yapabilirsiniz.']);}catch(\Throwable$error){View::render('register',['csrf'=>Csrf::token(),'esc'=>$esc,'error'=>$error instanceof \DomainException?$error->getMessage():'Kayıt tamamlanamadı.']);}}}
-if($page==='/forgot-password'){if($method==='GET')View::render('forgot-password',['csrf'=>Csrf::token(),'esc'=>$esc]);if($method==='POST'){if(!Csrf::verify($_POST['_csrf']??null))\App\Core\Http::error('CSRF doğrulaması başarısız.',419);\App\Core\RateLimiter::enforce('password-reset',5,3600);(new PasswordResetService())->request((string)($_POST['email']??''));View::render('forgot-password',['csrf'=>Csrf::token(),'esc'=>$esc,'message'=>'Hesap mevcutsa sıfırlama bağlantısı gönderildi.']);}}
-if($page==='/reset-password'){if($method==='GET')View::render('reset-password',['csrf'=>Csrf::token(),'esc'=>$esc,'token'=>(string)($_GET['token']??'')]);if($method==='POST'){if(!Csrf::verify($_POST['_csrf']??null))\App\Core\Http::error('CSRF doğrulaması başarısız.',419);try{(new PasswordResetService())->reset((string)($_POST['token']??''),(string)($_POST['password']??''),(string)($_POST['confirmation']??''));View::render('reset-password',['csrf'=>Csrf::token(),'esc'=>$esc,'token'=>'','message'=>'Şifreniz yenilendi. Açık loader oturumları kapatıldı.']);}catch(\Throwable$error){View::render('reset-password',['csrf'=>Csrf::token(),'esc'=>$esc,'token'=>(string)($_POST['token']??''),'error'=>$error instanceof \DomainException?$error->getMessage():'Şifre yenilenemedi.']);}}}
+
+if($page==='/register'){
+    if($method==='GET')View::render('register',['csrf'=>Csrf::token(),'esc'=>$esc]);
+    if($method==='POST'){
+        if(!Csrf::verify($_POST['_csrf']??null))\App\Core\Http::error('CSRF doğrulaması başarısız.',419);
+        try{
+            (new AuthService())->register((string)($_POST['email']??''),(string)($_POST['display_name']??''),(string)($_POST['password']??''));
+            View::render('register',['csrf'=>Csrf::token(),'esc'=>$esc,'message'=>'Hesap oluşturuldu. Loader üzerinden giriş yapabilirsiniz.']);
+        }catch(\Throwable$error){
+            View::render('register',['csrf'=>Csrf::token(),'esc'=>$esc,'error'=>$error instanceof \DomainException?$error->getMessage():'Kayıt tamamlanamadı.']);
+        }
+    }
+}
+
+if($page==='/forgot-password'){
+    if($method==='GET')View::render('forgot-password',['csrf'=>Csrf::token(),'esc'=>$esc]);
+    if($method==='POST'){
+        if(!Csrf::verify($_POST['_csrf']??null))\App\Core\Http::error('CSRF doğrulaması başarısız.',419);
+
+        if(!RateLimiter::attempt('password-reset',5,3600)){
+            http_response_code(429);
+            View::render('forgot-password',[
+                'csrf'=>Csrf::token(),
+                'esc'=>$esc,
+                'error'=>'Çok fazla şifre sıfırlama isteği gönderildi. Güvenliğiniz için lütfen bir süre sonra tekrar deneyin.'
+            ]);
+        }
+
+        (new PasswordResetService())->request((string)($_POST['email']??''));
+        View::render('forgot-password',[
+            'csrf'=>Csrf::token(),
+            'esc'=>$esc,
+            'message'=>'Hesap mevcutsa sıfırlama bağlantısı e-posta adresinize gönderildi.'
+        ]);
+    }
+}
+
+if($page==='/reset-password'){
+    if($method==='GET')View::render('reset-password',['csrf'=>Csrf::token(),'esc'=>$esc,'token'=>(string)($_GET['token']??'')]);
+    if($method==='POST'){
+        if(!Csrf::verify($_POST['_csrf']??null))\App\Core\Http::error('CSRF doğrulaması başarısız.',419);
+        try{
+            (new PasswordResetService())->reset((string)($_POST['token']??''),(string)($_POST['password']??''),(string)($_POST['confirmation']??''));
+            View::render('reset-password',['csrf'=>Csrf::token(),'esc'=>$esc,'token'=>'','message'=>'Şifreniz yenilendi. Açık loader oturumları kapatıldı.']);
+        }catch(\Throwable$error){
+            View::render('reset-password',['csrf'=>Csrf::token(),'esc'=>$esc,'token'=>(string)($_POST['token']??''),'error'=>$error instanceof \DomainException?$error->getMessage():'Şifre yenilenemedi.']);
+        }
+    }
+}
+
 if($path==='/health'){header('Content-Type: application/json');echo json_encode(['ok'=>true,'time'=>gmdate(DATE_ATOM)]);exit;}
 View::render('home');
