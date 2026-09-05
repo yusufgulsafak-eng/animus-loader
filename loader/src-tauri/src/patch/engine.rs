@@ -925,8 +925,29 @@ fn verify_records_with_backup(game: &Path, backup: &Path, changes: &[ChangeRecor
 fn is_archive_install(changes: &[ChangeRecord]) -> bool {
     changes.len() == 1 && changes[0].kind == ChangeKind::PatchedArchive
 }
+
+fn backup_material_exists(id: &str) -> Result<bool> {
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err(LoaderError::UnsafePath(id.into()));
+    }
+    let primary = crate::storage::data_root()?.join("backups").join(id);
+    let recovery = crate::storage::recovery_backups_root()?.join(id);
+    Ok(primary.join("metadata.json").is_file() || recovery.join("metadata.json").is_file())
+}
+
+fn forget_installation_record(install: &Installation) -> Result<()> {
+    let path = installation_path(install.game_id)?;
+    if path.is_file() {
+        fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
 /// Onceki kurulumu vanilla haline dondurur. `force`, kullanici dosyalari elle
-/// degistirmis olsa bile yedekten geri yazmaya izin verir.
+/// degistirmis olsa bile yedekten geri yazmaya izin verir. Backup/recovery
+/// tamamen kayipsa force yalnızca kullanıcının oyun dosyalarını mağazadan
+/// doğruladığını kabul ederek eski Loader kaydını temizler; oyun dosyalarına
+/// dokunmaz.
 fn restore_previous(game_root: &Path, previous: &Installation, force: bool) -> Result<()> {
     let same_root = PathBuf::from(&previous.game_root)
         .canonicalize()
@@ -940,6 +961,25 @@ fn restore_previous(game_root: &Path, previous: &Installation, force: bool) -> R
             previous.game_root
         )));
     }
+
+    if !backup_material_exists(&previous.backup_id)? {
+        if !force {
+            return Err(LoaderError::Conflict(
+                "Önceki kurulumun yedeği bulunamadı ve kurtarma kopyası da yok. Oyun dosyalarını Steam/Ubisoft üzerinden doğruladıysanız zorla devam ederek yalnızca eski Loader kaydını temizleyebilirsiniz; oyun dosyaları Loader tarafından değiştirilmeyecek.".into(),
+            ));
+        }
+        forget_installation_record(previous)?;
+        let _ = crate::logging::event(
+            "warning",
+            "install",
+            &format!(
+                "Backup/recovery yok; doğrulama sonrası yalnızca eski kurulum kaydı temizlendi: game_id={}",
+                previous.game_id
+            ),
+        );
+        return Ok(());
+    }
+
     let backup = backup_root(&previous.backup_id)?;
     if !backup.join("metadata.json").is_file() {
         if !force {
@@ -970,7 +1010,33 @@ pub fn uninstall(game_id: u64, game_root: &Path, force: bool) -> Result<Uninstal
             "Kurulum manifestindeki oyun kökü farklı".into(),
         ));
     }
-    let check = verify_records_with_backup(game_root, &backup_root(&install.backup_id)?, &install.changes)?;
+
+    // Eski kurulumlarda kullanıcı LocalAppData backup'ını recovery sistemi
+    // eklenmeden önce silmiş olabilir. Normal kaldırma bu durumda kesinlikle
+    // dosyalara dokunmaz. Force ise yalnızca kullanıcı mağaza doğrulamasını
+    // yaptığını onayladıktan sonra stale installation kaydını temizler.
+    if !backup_material_exists(&install.backup_id)? {
+        if !force {
+            return Err(LoaderError::Conflict(
+                "Kurulumun yedeği bulunamadı ve kurtarma kopyası da yok. Güvenlik için oyun dosyalarına dokunulmadı. Oyun dosyalarını Steam/Ubisoft üzerinden doğruladıysanız tekrar deneyip zorla devam ederek yalnızca eski Loader kaydını temizleyebilirsiniz.".into(),
+            ));
+        }
+        forget_installation_record(&install)?;
+        let note = "Yedek/kurtarma olmadığı için oyun dosyaları geri yüklenmedi; yalnızca eski Loader kurulum kaydı temizlendi.".to_string();
+        let _ = crate::logging::event(
+            "warning",
+            "uninstall",
+            &format!("{note} game_id={game_id}"),
+        );
+        return Ok(UninstallReport {
+            restored: 0,
+            forced: true,
+            conflicts: vec![note],
+        });
+    }
+
+    let backup = backup_root(&install.backup_id)?;
+    let check = verify_records_with_backup(game_root, &backup, &install.changes)?;
     // FAT/DAT restore itself validates the base prefix and known partial suffix;
     // this also permits recovery after a terminated append without forcing.
     if !check.valid && !force && !is_archive_install(&install.changes) {
@@ -979,7 +1045,6 @@ pub fn uninstall(game_id: u64, game_root: &Path, force: bool) -> Result<Uninstal
             check.conflicts.join(", ")
         )));
     }
-    let backup = backup_root(&install.backup_id)?;
     if !backup.join("metadata.json").is_file() && !force {
         return Err(LoaderError::Conflict(
             "Kurulumun yedeği bulunamadı; orijinal dosyalar geri yüklenemez.".into(),
