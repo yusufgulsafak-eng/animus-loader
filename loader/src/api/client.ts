@@ -50,7 +50,9 @@ function userMessage(error:unknown,status=0){
 async function request<T>(path:string,init:RequestInit={}):Promise<T>{
   await initialize();
   const headers=new Headers(init.headers);headers.set("Accept","application/json");
-  headers.set("X-Animus-Device",deviceId());
+  // Cihaz bağı tokenın sunucu tarafındaki device_id alanında tutulur.
+  // Burada özel X-* header göndermiyoruz; böylece login dahil isteklerde
+  // gereksiz CORS/preflight oluşmaz.
   if(init.body&&!(init.body instanceof FormData)&&!headers.has("Content-Type"))headers.set("Content-Type","application/json");
   if(authSession.bearer())headers.set("Authorization","Bearer "+authSession.bearer());
   const controller=new AbortController();const timer=window.setTimeout(()=>controller.abort(),20000);
@@ -71,12 +73,17 @@ async function initialize(){localStorage.removeItem("loader_token");await authSe
 export const api={
   initialize,
   async login(email:string,password:string,remember=true){
-    const result=await request<{user:User;token:string;device:DeviceInfo}>("/auth/login",{method:"POST",body:JSON.stringify({email,password,device_id:deviceId(),device_name:deviceName()})});
+    const result=await request<{user:User;token:string;device?:DeviceInfo}>("/auth/login",{method:"POST",body:JSON.stringify({email,password,device_id:deviceId(),device_name:deviceName()})});
     await authSession.accept(result.token,remember);
-    await log("info","login",`Kullanıcı ve cihaz doğrulandı: ${result.device.device_name}`);
+    await log("info","login",result.device?`Kullanıcı ve cihaz doğrulandı: ${result.device.device_name}`:"Kullanıcı doğrulandı; sunucu cihaz bağı eski API uyumluluğunda çalışıyor.");
     return result.user;
   },
-  async register(displayName:string,email:string,password:string){const result=await request<{user:User;token:string;message:string;device:DeviceInfo}>("/auth/register",{method:"POST",body:JSON.stringify({display_name:displayName,email,password,device_id:deviceId(),device_name:deviceName()})});await authSession.accept(result.token,true);await log("info","login",`Kullanıcı kaydı ve cihaz aktivasyonu başarılı: ${result.device.device_name}`);return result.user},
+  async register(displayName:string,email:string,password:string){
+    const result=await request<{user:User;token:string;message:string;device?:DeviceInfo}>("/auth/register",{method:"POST",body:JSON.stringify({display_name:displayName,email,password,device_id:deviceId(),device_name:deviceName()})});
+    await authSession.accept(result.token,true);
+    await log("info","login",result.device?`Kullanıcı kaydı ve cihaz aktivasyonu başarılı: ${result.device.device_name}`:"Kullanıcı kaydı başarılı; sunucu eski API uyumluluğunda çalışıyor.");
+    return result.user;
+  },
   me:()=>request<User>("/auth/me"),
   currentDevice:()=>request<DeviceInfo|null>("/device/current"),
   revokeCurrentDevice:()=>request<{message:string}>("/device/current",{method:"DELETE"}),
