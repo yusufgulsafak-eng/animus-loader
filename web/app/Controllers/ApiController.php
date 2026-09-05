@@ -104,8 +104,9 @@ final class ApiController
     {
         RateLimiter::enforce('download-token',30,60);
         $u=$this->auth->requireUser();
-        $deviceUuid=(string)($_SERVER['HTTP_X_ANIMUS_DEVICE']??'');
-        $device=(new DeviceService())->requireActiveForUser((int)$u['id'],$deviceUuid);
+        // requireUser() token-device bağını zaten doğrular. İstemciden ayrıca
+        // özel cihaz headerı istenmez; böylece CORS/preflight sorunu oluşmaz.
+        if(empty($u['device_id']))Http::error('Bu oturum bir cihaza bağlı değil.',403);
         $this->assertManifestAccess($id,$u);
         $pdo=Database::connection();
         $s=$pdo->prepare('SELECT id,source_type,external_url FROM patch_archives WHERE patch_version_id=?');$s->execute([$id]);$archive=$s->fetch();if(!$archive)Http::error('Patch arşivi bulunamadı.',404);
