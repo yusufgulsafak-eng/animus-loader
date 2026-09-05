@@ -1,0 +1,48 @@
+/* Animus Profesyonel Çeviri — final visual polish */
+
+.login{background:#18191d!important}
+.login-visual{
+  background:radial-gradient(circle at 28% 24%,rgba(255,255,255,.035),transparent 35%),linear-gradient(145deg,#25262b,#1d1e22 62%,#18191d)!important;
+  border-right:1px solid rgba(255,255,255,.065);
+}
+.login-visual>.background-media-layer{display:none!important}
+.login-visual:after,.login-visual:before{content:none!important;display:none!important}
+.login-form{background:#1c1d21!important}
+.login-form input,.password-field{background:#15161a!important;border-color:#36383f!important}
+.login-form input:focus,.password-field:focus-within{border-color:var(--accent)!important}
+.login-visual h1{max-width:720px;letter-spacing:-.045em}
+.login-visual p{display:none!important}
+.login-visual .overline{letter-spacing:.2em}
+
+/* Remove the legacy circle/orb that can sit over background video. */
+.hero-shape,.launcher-hero .hero-shape,.background-media-layer .hero-shape{display:none!important}
+.launcher-hero:after,.launcher-hero:before{content:none!important;display:none!important}
+
+/* Video starts on poster/fallback immediately and resolves without a long fade. */
+.background-media-layer{background:#18191d}
+.background-media-layer>video,.background-media-layer>img{opacity:1!important;transition:none!important}
+.background-media-layer>video{background:#18191d}
+
+/* Professional neutral panels. */
+.shell>header,.rightbar,.profile-card{background-color:rgba(18,19,22,.95)!important}
+.support-card{background:linear-gradient(145deg,#24262b,#18191d)!important;border:1px solid rgba(255,255,255,.06)}
+
+.animus-security-status{
+  display:grid;
+  gap:8px;
+  margin:18px 0 2px;
+  padding:12px 14px;
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:12px;
+  background:rgba(255,255,255,.025);
+  text-align:left;
+}
+.animus-security-status span{display:flex;align-items:center;gap:9px;color:#c7c9cf;font-size:12px;font-weight:700}
+.animus-security-status i{width:18px;height:18px;display:grid;place-items:center;border-radius:50%;background:rgba(183,243,74,.12);color:var(--accent);font-style:normal;font-size:11px}
+.animus-device-badge{display:inline-flex;align-items:center;gap:6px;margin-top:7px;color:var(--accent);font-size:10px;font-weight:900;letter-spacing:.08em;text-transform:uppercase}
+
+@media(max-width:760px){
+  .login{display:block;min-height:100vh}
+  .login-visual{min-height:240px;padding:42px 28px}
+  .login-form{padding:34px 28px 48px}
+}
