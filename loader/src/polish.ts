@@ -1,14 +1,23 @@
 import {api} from "./api/client";
 
+const PROFESSIONAL_NAME="Animus Profesyonel Çeviri";
+
+function setText(el:HTMLElement|null,text:string){
+  if(el&&el.textContent!==text)el.textContent=text;
+}
+
 function replaceVisibleCopy(root:ParentNode=document){
-  root.querySelectorAll<HTMLElement>(".login-visual .overline").forEach(el=>{el.textContent="ANIMUS PROFESYONEL ÇEVİRİ"});
-  root.querySelectorAll<HTMLElement>(".login-visual h1").forEach(el=>{el.textContent="Profesyonel Türkçe oyun deneyimi."});
-  root.querySelectorAll<HTMLElement>(".mobile-logo").forEach(el=>{el.textContent="Animus Profesyonel Çeviri"});
-  root.querySelectorAll<HTMLElement>(".startup-splash-name").forEach(el=>{el.textContent="Animus Profesyonel Çeviri"});
+  root.querySelectorAll<HTMLElement>(".login-visual .overline").forEach(el=>setText(el,"ANIMUS PROFESYONEL ÇEVİRİ"));
+  root.querySelectorAll<HTMLElement>(".login-visual h1").forEach(el=>setText(el,"Profesyonel Türkçe oyun deneyimi."));
+  root.querySelectorAll<HTMLElement>(".mobile-logo").forEach(el=>setText(el,PROFESSIONAL_NAME));
+  root.querySelectorAll<HTMLElement>(".startup-splash-name").forEach(el=>setText(el,PROFESSIONAL_NAME));
 
   root.querySelectorAll<HTMLElement>(".brand.nav-button").forEach(el=>{
-    const image=el.querySelector(".brand-logo")?.outerHTML||"";
-    el.innerHTML=image+"Animus Profesyonel Çeviri";
+    if(el.dataset.animusProfessionalBrand==="1")return;
+    const logo=el.querySelector<HTMLElement>(".brand-logo");
+    [...el.childNodes].forEach(node=>{if(node!==logo)node.remove()});
+    el.append(document.createTextNode(PROFESSIONAL_NAME));
+    el.dataset.animusProfessionalBrand="1";
   });
 
   root.querySelectorAll<HTMLElement>(".operation").forEach(operation=>{
@@ -21,19 +30,22 @@ function replaceVisibleCopy(root:ParentNode=document){
   });
 }
 
+let markingDevice=false;
 async function markDevice(){
-  if(!document.querySelector(".shell")||document.querySelector(".animus-device-badge"))return;
+  if(markingDevice||!document.querySelector(".shell")||document.querySelector(".animus-device-badge"))return;
+  markingDevice=true;
   try{
     const device=await api.currentDevice();
     if(!device)return;
     const card=document.querySelector<HTMLElement>(".profile-card");
-    if(!card)return;
+    if(!card||card.querySelector(".animus-device-badge"))return;
     const badge=document.createElement("div");
     badge.className="animus-device-badge";
     badge.textContent="✓ Cihaz doğrulandı";
     badge.title=device.device_name;
     card.append(badge);
   }catch{/* Oturum akışı kendi hata yönetimini yapar. */}
+  finally{markingDevice=false}
 }
 
 let scheduled=false;
