@@ -7,7 +7,7 @@ html {
   width: 100%;
   min-width: 100%;
   min-height: 100%;
-  background: #17181b;
+  background: #08070c;
 }
 
 body {
@@ -15,12 +15,12 @@ body {
   width: 100%;
   min-width: 100%;
   min-height: 100%;
-  background: var(--bg, #17181b);
+  background: var(--bg, #08070c);
 }
 
 body.splash-active {
   overflow: hidden;
-  background: #1b1c20;
+  background: #08070c;
 }
 
 .startup-splash {
@@ -29,8 +29,8 @@ body.splash-active {
   z-index: 2147483647;
   overflow: hidden;
   background:
-    radial-gradient(circle at 50% 42%, rgba(255,255,255,.035) 0%, rgba(255,255,255,.014) 28%, transparent 58%),
-    linear-gradient(180deg, #222328 0%, #1c1d21 52%, #18191d 100%);
+    radial-gradient(circle at 50% 43%, rgba(118,61,199,.13) 0%, rgba(50,24,78,.08) 27%, transparent 56%),
+    linear-gradient(180deg, #100e16 0%, #0c0a10 52%, #08070c 100%);
   opacity: 1;
   visibility: visible;
   pointer-events: all;
@@ -42,9 +42,7 @@ body.splash-active {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background:
-    linear-gradient(90deg, rgba(255,255,255,.018), transparent 24%, transparent 76%, rgba(0,0,0,.08)),
-    radial-gradient(circle at center, transparent 36%, rgba(0,0,0,.12) 76%, rgba(0,0,0,.26) 100%);
+  background: radial-gradient(circle at center, transparent 36%, rgba(0,0,0,.16) 76%, rgba(0,0,0,.34) 100%);
 }
 
 .startup-splash.is-leaving {
@@ -74,7 +72,7 @@ body.splash-active {
   transform-origin: 50% 52%;
   opacity: 0;
   animation:
-    animus-logo-intro 620ms cubic-bezier(0.16, 1, 0.3, 1) forwards,
+    animus-logo-intro 620ms cubic-bezier(0.16,1,0.3,1) forwards,
     animus-logo-breathe 2600ms ease-in-out 620ms infinite;
   will-change: transform, opacity, filter;
 }
@@ -98,49 +96,33 @@ body.splash-active {
   object-fit: contain;
   user-select: none;
   -webkit-user-drag: none;
-  filter: drop-shadow(0 0 8px rgba(255, 64, 32, 0.18));
+  filter: drop-shadow(0 0 8px rgba(255,64,32,.18));
 }
 
 .startup-splash-divider {
   width: 1px;
   height: 31px;
-  background: rgba(255, 255, 255, 0.18);
+  background: rgba(255,255,255,.18);
 }
 
 .startup-splash-name {
-  color: rgba(242, 243, 245, 0.90);
-  font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  color: rgba(242,239,248,.90);
+  font-family: "Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,BlinkMacSystemFont,sans-serif;
   font-size: 21px;
   font-weight: 500;
-  letter-spacing: 0.01em;
+  letter-spacing: .01em;
   text-rendering: geometricPrecision;
 }
 
 @keyframes animus-logo-intro {
-  0% {
-    opacity: 0;
-    transform: translateY(5px) scale(0.90);
-    filter: drop-shadow(0 0 0 rgba(255,45,20,0)) brightness(.86);
-  }
-  68% { opacity: 1; }
-  100% {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-    filter: drop-shadow(0 0 15px rgba(255,50,24,.24)) brightness(1);
-  }
+  0% { opacity:0; transform:translateY(5px) scale(.90); filter:drop-shadow(0 0 0 rgba(255,45,20,0)) brightness(.86); }
+  68% { opacity:1; }
+  100% { opacity:1; transform:translateY(0) scale(1); filter:drop-shadow(0 0 15px rgba(255,50,24,.24)) brightness(1); }
 }
 
 @keyframes animus-logo-breathe {
-  0%,100% {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-    filter: drop-shadow(0 0 13px rgba(255,45,20,.20)) brightness(1);
-  }
-  50% {
-    opacity: 1;
-    transform: translateY(-3px) scale(1.016);
-    filter: drop-shadow(0 0 23px rgba(255,52,22,.34)) brightness(1.035);
-  }
+  0%,100% { opacity:1; transform:translateY(0) scale(1); filter:drop-shadow(0 0 13px rgba(255,45,20,.20)) brightness(1); }
+  50% { opacity:1; transform:translateY(-3px) scale(1.016); filter:drop-shadow(0 0 23px rgba(255,52,22,.34)) brightness(1.035); }
 }
 
 @keyframes animus-brand-in {
@@ -148,12 +130,12 @@ body.splash-active {
   to { opacity:1; transform:translate(-50%,0); }
 }
 
-@media (max-width: 900px) {
+@media (max-width:900px) {
   .startup-splash-center { width:min(45vw,360px); }
   .startup-splash-name { font-size:18px; }
 }
 
-@media (prefers-reduced-motion: reduce) {
+@media (prefers-reduced-motion:reduce) {
   .startup-splash-logo { animation:animus-logo-reduced 160ms ease forwards; }
   .startup-splash-brand { animation:animus-brand-in 160ms ease forwards; }
   .startup-splash { transition-duration:100ms; }
