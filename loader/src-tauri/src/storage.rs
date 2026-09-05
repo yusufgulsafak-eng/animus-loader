@@ -19,7 +19,7 @@ fn backups_root() -> Result<PathBuf> {
     Ok(data_root()?.join("backups"))
 }
 
-fn recovery_backups_root() -> Result<PathBuf> {
+pub fn recovery_backups_root() -> Result<PathBuf> {
     Ok(data_root()?.join("recovery").join("backups"))
 }
 
@@ -32,14 +32,9 @@ fn recovery_path_for_backup(path: &Path) -> Result<Option<PathBuf>> {
         return Ok(None);
     };
 
-    // Sadece gerçek backup alt yollarını kabul et. `..` gibi bileşenlere izin
-    // verme; Path::strip_prefix sonrası bile fail-closed kalalım.
     if relative.as_os_str().is_empty()
         || relative.components().any(|component| {
-            !matches!(
-                component,
-                std::path::Component::Normal(_)
-            )
+            !matches!(component, std::path::Component::Normal(_))
         })
     {
         return Ok(None);
@@ -87,6 +82,14 @@ pub fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
         file.sync_all()?;
     }
     fs::rename(temporary, path)?;
+
+    // Backup journal/metadata dosyalarını da bağımsız recovery aynasına yaz.
+    // Böylece yalnızca `files/` değil, backup'ın kimliği ve değişiklik kaydı da
+    // primary backup klasörü silinse bile yeniden oluşturulabilir.
+    if let Some(recovery) = recovery_path_for_backup(path)? {
+        copy_atomic(path, &recovery)?;
+    }
+
     Ok(())
 }
 
@@ -106,13 +109,11 @@ pub fn directory_size(path: &Path) -> u64 {
 
 /// Dosya kopyalama aynı zamanda backup dosyaları için bağımsız kurtarma
 /// aynası tutar. Kaynak normal backup klasöründen silinmişse otomatik olarak
-/// recovery aynasına düşer. Böylece ham Windows `os error 3` kullanıcıya
-/// sızmaz ve mümkün olduğunda kaldırma kendini onarır.
+/// recovery aynasına düşer.
 pub fn copy_file(source: &Path, destination: &Path) -> Result<()> {
     let mut actual_source = source.to_path_buf();
-    let source_missing = !actual_source.is_file();
 
-    if source_missing {
+    if !actual_source.is_file() {
         if let Some(recovery) = recovery_path_for_backup(source)? {
             if recovery.is_file() {
                 actual_source = recovery;
@@ -133,7 +134,6 @@ pub fn copy_file(source: &Path, destination: &Path) -> Result<()> {
     copy_atomic(&actual_source, destination)?;
 
     // Yeni bir backup dosyası oluşturuluyorsa ikinci, bağımsız kopyayı da tut.
-    // Restore sırasında destination oyun dosyası olduğu için bu blok çalışmaz.
     if let Some(recovery) = recovery_path_for_backup(destination)? {
         if actual_source != recovery {
             copy_atomic(&actual_source, &recovery)?;
