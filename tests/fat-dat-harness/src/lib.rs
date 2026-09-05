@@ -3,6 +3,7 @@ pub mod error {
     #[derive(Debug, thiserror::Error)]
     pub enum LoaderError {
         #[error("{0}")] Integrity(String),
+        #[error("{0}")] Conflict(String),
         #[error("{0}")] UnsafePath(String),
         #[error("{0}")] Other(String),
         #[error("{0}")] Io(#[from] std::io::Error),
@@ -19,5 +20,4 @@ pub mod path;
 pub mod security { pub use crate::path; }
 #[path="../../../loader/src-tauri/src/patch/fat_dat.rs"]
 pub mod fat_dat;
-
 
