@@ -32,6 +32,7 @@ final class ApiController
             if($method==='GET'&&$path==='/api/user/me')$this->me();
             if($method==='GET'&&$path==='/api/device/current')$this->deviceCurrent();
             if($method==='DELETE'&&$path==='/api/device/current')$this->deviceRevoke();
+            if($method==='GET'&&$path==='/api/public/games')$this->publicGames();
             if($method==='GET'&&$path==='/api/games')$this->games();
             if($method==='GET'&&$path==='/api/admin/panel')$this->adminPanel();
             if($method==='POST'&&$path==='/api/admin/action')$this->adminAction();
@@ -95,6 +96,7 @@ final class ApiController
         $result=AdminActions::dispatch((string)($body['action']??''),$body,$_FILES,$user);
         Http::json(['ok'=>true,'data'=>$result]);
     }
+    private function publicGames():never{$games=(new CatalogService())->publicGames(['q'=>trim((string)($_GET['q']??'')),'access'=>$_GET['access']??null]);Http::json(['ok'=>true,'data'=>$games,'meta'=>['count'=>count($games)]]);}
     private function games():never{$u=$this->auth->requireUser();$games=(new CatalogService())->games($u,['q'=>trim((string)($_GET['q']??'')),'access'=>$_GET['access']??null]);Http::json(['ok'=>true,'data'=>$games,'meta'=>['count'=>count($games)]]);}
     private function game(int$id):never{$u=$this->auth->requireUser();$g=(new CatalogService())->game($id,$u);if(!$g)Http::error('Oyun bulunamadı.',404);Http::json(['ok'=>true,'data'=>$g]);}
     private function gamePatch(int$id):never{$u=$this->auth->requireUser();$p=(new CatalogService())->activePatch($id,$u);if(!$p)Http::error('Yayınlanmış patch bulunamadı.',404);if($p['access_type']==='premium'&&!$this->auth->canAccessPremium($u))Http::error('Premium abonelik gerekli.',403);Http::json(['ok'=>true,'data'=>$p]);}
@@ -104,8 +106,6 @@ final class ApiController
     {
         RateLimiter::enforce('download-token',30,60);
         $u=$this->auth->requireUser();
-        // requireUser() token-device bağını zaten doğrular. İstemciden ayrıca
-        // özel cihaz headerı istenmez; böylece CORS/preflight sorunu oluşmaz.
         if(empty($u['device_id']))Http::error('Bu oturum bir cihaza bağlı değil.',403);
         $this->assertManifestAccess($id,$u);
         $pdo=Database::connection();
