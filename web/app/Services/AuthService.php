@@ -52,10 +52,12 @@ final class AuthService
         if (!$bearer) {
             return Session::user();
         }
-        $deviceUuid = strtolower(trim((string)($_SERVER['HTTP_X_ANIMUS_DEVICE'] ?? '')));
-        if ($deviceUuid === '') return null;
-        $stmt = Database::connection()->prepare("SELECT u.id,u.email,u.display_name,u.role,u.release_channel,u.status,d.id device_id,d.device_uuid,d.device_name FROM api_tokens t JOIN users u ON u.id=t.user_id JOIN user_devices d ON d.id=t.device_id AND d.user_id=u.id AND d.status='active' WHERE t.token_hash=? AND t.expires_at>NOW() AND u.status='active' AND d.device_uuid=? LIMIT 1");
-        $stmt->execute([hash('sha256', $bearer), $deviceUuid]);
+
+        // Cihaz kimliği token oluşturulurken api_tokens.device_id alanına bağlanır.
+        // İstemciden her istekte özel X-* header istemek CORS/preflight sorunlarına
+        // yol açtığı için doğrulama tamamen sunucu tarafındaki token-device bağıyla yapılır.
+        $stmt = Database::connection()->prepare("SELECT u.id,u.email,u.display_name,u.role,u.release_channel,u.status,d.id device_id,d.device_uuid,d.device_name FROM api_tokens t JOIN users u ON u.id=t.user_id JOIN user_devices d ON d.id=t.device_id AND d.user_id=u.id AND d.status='active' WHERE t.token_hash=? AND t.expires_at>NOW() AND u.status='active' LIMIT 1");
+        $stmt->execute([hash('sha256', $bearer)]);
         $user = $stmt->fetch() ?: null;
         if ($user) {
             Database::connection()->prepare('UPDATE api_tokens SET last_used_at=NOW() WHERE token_hash=?')->execute([hash('sha256', $bearer)]);
