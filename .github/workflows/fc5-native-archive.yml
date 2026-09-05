@@ -2,7 +2,7 @@ name: FC5 Native Archive Tests and Windows Build
 
 on:
   push:
-    branches: [codex/fc5-native-append]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -26,7 +26,7 @@ jobs:
     name: Build Windows release
     runs-on: windows-latest
     env:
-      VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+      VITE_API_BASE_URL: https://animus-api.intelpol.workers.dev
 
     steps:
       - name: Checkout repository
@@ -45,9 +45,9 @@ jobs:
       - name: Validate production API variable
         shell: pwsh
         run: |
-          $expected = "https://api.yusufgulsafak.com"
+          $expected = "https://animus-api.intelpol.workers.dev"
           if ([string]::IsNullOrWhiteSpace($env:VITE_API_BASE_URL)) {
-            throw "Repository Variable VITE_API_BASE_URL is required."
+            throw "VITE_API_BASE_URL is required."
           }
           if ($env:VITE_API_BASE_URL.TrimEnd("/") -ne $expected) {
             throw "VITE_API_BASE_URL must be exactly $expected"
@@ -112,7 +112,7 @@ jobs:
           $files = Get-ChildItem -LiteralPath "loader/dist" -Recurse -File |
             Where-Object { $_.Extension -in @(".html", ".js", ".css", ".json", ".map") }
           $content = ($files | ForEach-Object { [IO.File]::ReadAllText($_.FullName) }) -join "`n"
-          $expected = "https://api.yusufgulsafak.com"
+          $expected = "https://animus-api.intelpol.workers.dev"
           if (-not $content.Contains($expected)) {
             throw "Production API origin was not embedded in the frontend output."
           }
@@ -124,6 +124,7 @@ jobs:
             "https://localhost",
             "http://127.0.0.1",
             "https://127.0.0.1",
+            "https://api.yusufgulsafak.com",
             "https://yusufgulsafak.com"
           )
           foreach ($value in $forbidden) {
@@ -161,6 +162,3 @@ jobs:
             loader/src-tauri/target/release/*.exe
             loader/src-tauri/target/release/bundle/nsis/*.exe
             loader/src-tauri/target/release/bundle/msi/*.msi
-
-
-
