@@ -1,6 +1,7 @@
 import {API_BASE_URL} from "../config";
 import {log} from "../services/logger";
 import {authSession} from "../auth/session";
+import {deviceId,deviceName} from "../auth/device";
 import type {ApiEnvelope,Game,LoaderConfig,User} from "../types";
 import type {AdminPanelData} from "../admin/types";
 
@@ -23,6 +24,15 @@ export type ChatMessage={
   role:"user"|"tester"|"admin"|"super_admin";
 };
 
+export type DeviceInfo={
+  id:number;
+  device_uuid:string;
+  device_name:string;
+  status:"active"|"revoked";
+  activated_at?:string;
+  last_seen_at?:string;
+};
+
 export class ApiError extends Error{
   constructor(message:string,public status=0){super(message);this.name="ApiError";}
 }
@@ -40,6 +50,7 @@ function userMessage(error:unknown,status=0){
 async function request<T>(path:string,init:RequestInit={}):Promise<T>{
   await initialize();
   const headers=new Headers(init.headers);headers.set("Accept","application/json");
+  headers.set("X-Animus-Device",deviceId());
   if(init.body&&!(init.body instanceof FormData)&&!headers.has("Content-Type"))headers.set("Content-Type","application/json");
   if(authSession.bearer())headers.set("Authorization","Bearer "+authSession.bearer());
   const controller=new AbortController();const timer=window.setTimeout(()=>controller.abort(),20000);
@@ -60,13 +71,15 @@ async function initialize(){localStorage.removeItem("loader_token");await authSe
 export const api={
   initialize,
   async login(email:string,password:string,remember=true){
-    const result=await request<{user:User;token:string}>("/auth/login",{method:"POST",body:JSON.stringify({email,password})});
+    const result=await request<{user:User;token:string;device:DeviceInfo}>("/auth/login",{method:"POST",body:JSON.stringify({email,password,device_id:deviceId(),device_name:deviceName()})});
     await authSession.accept(result.token,remember);
-    await log("info","login","Kullanıcı girişi başarılı");
+    await log("info","login",`Kullanıcı ve cihaz doğrulandı: ${result.device.device_name}`);
     return result.user;
   },
-  async register(displayName:string,email:string,password:string){const result=await request<{user:User;token:string;message:string}>("/auth/register",{method:"POST",body:JSON.stringify({display_name:displayName,email,password})});await authSession.accept(result.token,true);await log("info","login","Kullanıcı kaydı ve güvenli otomatik giriş başarılı");return result.user},
+  async register(displayName:string,email:string,password:string){const result=await request<{user:User;token:string;message:string;device:DeviceInfo}>("/auth/register",{method:"POST",body:JSON.stringify({display_name:displayName,email,password,device_id:deviceId(),device_name:deviceName()})});await authSession.accept(result.token,true);await log("info","login",`Kullanıcı kaydı ve cihaz aktivasyonu başarılı: ${result.device.device_name}`);return result.user},
   me:()=>request<User>("/auth/me"),
+  currentDevice:()=>request<DeviceInfo|null>("/device/current"),
+  revokeCurrentDevice:()=>request<{message:string}>("/device/current",{method:"DELETE"}),
 
   updateProfile:(displayName:string)=>request<User>("/profile",{method:"PATCH",body:JSON.stringify({display_name:displayName})}),
   changePassword:(currentPassword:string,newPassword:string)=>request<{message:string}>("/profile/password",{method:"POST",body:JSON.stringify({current_password:currentPassword,new_password:newPassword})}),
@@ -86,7 +99,7 @@ export const api={
   game:(id:number)=>request<Game>("/games/"+id),
   patch:(id:number)=>request<Record<string,unknown>>("/games/"+id+"/patch"),
   manifest:(id:number)=>request<Record<string,unknown>>("/patches/"+id+"/manifest"),
-  downloadToken:(id:number)=>request<{url:string;expires_in:number}>("/patches/"+id+"/download-token",{method:"POST"}),
+  downloadToken:(id:number)=>request<{url:string;expires_in:number;device_verified?:boolean}>("/patches/"+id+"/download-token",{method:"POST"}),
   config:()=>request<LoaderConfig>("/loader/config"),
   latest:(channel="stable")=>request<Record<string,unknown>|null>("/loader/latest?channel="+channel),
   adminPanel:()=>request<AdminPanelData>("/admin/panel"),
