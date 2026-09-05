@@ -1,0 +1,19 @@
+{
+  "id": "ea9095a2-4199-4015-9842-04caec38995d",
+  "type": "APPEND_FAT_DAT",
+  "source": "ceviri.bin",
+  "destination": "data_final/pc/patch.dat",
+  "backup": true,
+  "expected_sha256": "A5B54114C937C5C56A65040DCC344BDDB0383C0B7A8D938ED46F456657803B68",
+  "options": {
+    "fat_path": "data_final/pc/patch.fat",
+    "fat_entry_hash": "F2BDFD295DE3F8F3",
+    "base_dat_sha256": "3992BA49E0DA1879EA6713930A32DB8D94143965067842926A05B8C941042D7B",
+    "base_fat_sha256": "B5FB72D86E685603C6FC727E86DB257CD670C3F26F7DA1167E3E83785D17C7B8",
+    "payload_sha256": "F055104FB18238DDFEA69168BB3F8A39E0C60CA310907B5EF99965F5CFDCB2C4",
+    "alignment": 8,
+    "compression": "none"
+  }
+}
+
+

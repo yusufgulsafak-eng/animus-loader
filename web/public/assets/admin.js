@@ -106,18 +106,24 @@
     } catch (error) { toast(error.message, true); }
   });
 
-  const types = ['COPY_FILE','COPY_DIRECTORY','REPLACE_FILE','DELETE_FILE','DELETE_DIRECTORY','CREATE_DIRECTORY','MOVE_FILE','RENAME_FILE'];
+  const types = ['COPY_FILE','COPY_DIRECTORY','REPLACE_FILE','DELETE_FILE','DELETE_DIRECTORY','CREATE_DIRECTORY','MOVE_FILE','RENAME_FILE','APPEND_FAT_DAT'];
   const escapeAttribute = value => String(value || '').replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;');
   const addAction = (value = {}) => {
     const row = document.createElement('div');
     row.className = 'action-row';
     row.dataset.id = value.id || crypto.randomUUID();
+    row.dataset.options = JSON.stringify(value.options || {});
+    row.dataset.expectedHash = value.expected_sha256 || '';
     const options = types.map(type => '<option ' + (type === value.type ? 'selected' : '') + '>' + type + '</option>').join('');
     row.innerHTML = '<select class="action-type">' + options + '</select>' +
       '<input class="action-source" list="archive-files" placeholder="Archive/game source path" value="' + escapeAttribute(value.source) + '">' +
       '<input class="action-destination" placeholder="Game root relative destination" value="' + escapeAttribute(value.destination) + '">' +
       '<label class="switch"><input class="action-backup" type="checkbox" ' + (value.backup !== false ? 'checked' : '') + '> Backup</label>' +
+      '<textarea class="action-options" aria-label="FAT/DAT kurulum seçenekleri" placeholder="FAT/DAT seçenekleri (JSON)">' + escapeAttribute(JSON.stringify(value.options || {}, null, 2)) + '</textarea>' +
       '<button class="icon-btn remove-action">Sil</button>';
+    const updateOptionsVisibility = () => { row.querySelector('.action-options').hidden = row.querySelector('.action-type').value !== 'APPEND_FAT_DAT'; };
+    row.querySelector('.action-type').addEventListener('change', updateOptionsVisibility);
+    updateOptionsVisibility();
     row.querySelector('.remove-action').onclick = () => row.remove();
     document.querySelector('#action-list').append(row);
   };
@@ -139,7 +145,10 @@
     type: row.querySelector('.action-type').value,
     source: row.querySelector('.action-source').value || null,
     destination: row.querySelector('.action-destination').value,
-    backup: row.querySelector('.action-backup').checked
+    backup: row.querySelector('.action-backup').checked,
+    options: row.querySelector('.action-type').value === 'APPEND_FAT_DAT'
+      ? JSON.parse(row.querySelector('.action-options').value || '{}') : JSON.parse(row.dataset.options || '{}'),
+    expected_sha256: row.dataset.expectedHash || null
   }));
   document.querySelector('#save-actions')?.addEventListener('click', async () => {
     try { await api({action:'save_actions',version_id:Number(document.querySelector('#builder-version-id').value),actions:collectActions()}); toast('Action listesi kaydedildi'); }
@@ -337,3 +346,5 @@
 
   addAction({type:'REPLACE_FILE',source:'files/translation.dat',destination:'Localization/translation.dat',backup:true});
 })();
+
+

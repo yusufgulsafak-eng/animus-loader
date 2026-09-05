@@ -1,0 +1,166 @@
+name: FC5 Native Archive Tests and Windows Build
+
+on:
+  push:
+    branches: [codex/fc5-native-append]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  archive-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test native archive update and recovery
+        run: cargo test --manifest-path tests/fat-dat-harness/Cargo.toml fat_dat
+      - name: Check PHP source syntax
+        run: find web/app -name '*.php' -print0 | xargs -0 -n1 php -l
+      - name: Test manifest validation
+        run: php tests/php/run.php
+
+  windows-release:
+    needs: archive-tests
+    name: Build Windows release
+    runs-on: windows-latest
+    env:
+      VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: loader/package-lock.json
+
+      - name: Set up Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate production API variable
+        shell: pwsh
+        run: |
+          $expected = "https://api.yusufgulsafak.com"
+          if ([string]::IsNullOrWhiteSpace($env:VITE_API_BASE_URL)) {
+            throw "Repository Variable VITE_API_BASE_URL is required."
+          }
+          if ($env:VITE_API_BASE_URL.TrimEnd("/") -ne $expected) {
+            throw "VITE_API_BASE_URL must be exactly $expected"
+          }
+
+      - name: Prepare redistributable PS1 OpenBIOS
+        shell: pwsh
+        run: |
+          $directory = "loader/src-tauri/resources/bios/ps1"
+          New-Item -ItemType Directory -Force -Path $directory | Out-Null
+
+          $commit = "01c647e8a2fa0b294944a2bbfcda9d7303061ea1"
+          $biosUrl = "https://raw.githubusercontent.com/mstan/psxrecomp/$commit/bios/openbios.bin"
+          $licenseUrl = "https://raw.githubusercontent.com/mstan/psxrecomp/$commit/bios/OpenBIOS.LICENSE"
+
+          $biosPath = Join-Path $directory "openbios.bin"
+          $licensePath = Join-Path $directory "OpenBIOS.LICENSE"
+
+          Invoke-WebRequest -Uri $biosUrl -OutFile $biosPath -UseBasicParsing
+          Invoke-WebRequest -Uri $licenseUrl -OutFile $licensePath -UseBasicParsing
+
+          $expectedSha256 = "fabe498fbf224e4721f12f31b6f5fe0659205e341dc4e5c5f91b9bd1a1011c57"
+          $actualSha256 = (Get-FileHash -LiteralPath $biosPath -Algorithm SHA256).Hash.ToLowerInvariant()
+
+          if ($actualSha256 -ne $expectedSha256) {
+            Remove-Item -LiteralPath $biosPath -Force -ErrorAction SilentlyContinue
+            throw "OpenBIOS SHA-256 mismatch. Expected $expectedSha256, got $actualSha256"
+          }
+
+          $size = (Get-Item -LiteralPath $biosPath).Length
+          if ($size -ne 524288) {
+            Remove-Item -LiteralPath $biosPath -Force -ErrorAction SilentlyContinue
+            throw "OpenBIOS size mismatch. Expected 524288 bytes, got $size"
+          }
+
+          Write-Host "OpenBIOS verified: $actualSha256 ($size bytes)"
+
+      - name: Verify Windows GUI subsystem
+        shell: pwsh
+        run: |
+          $entryPoint = Get-Content -LiteralPath "loader/src-tauri/src/main.rs" -Raw
+          $required = '#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]'
+          if (-not $entryPoint.Contains($required)) {
+            throw "Windows release GUI subsystem attribute is missing."
+          }
+
+      - name: Install loader dependencies
+        working-directory: loader
+        run: npm ci
+
+      - name: Run loader tests
+        working-directory: loader
+        run: npm test
+
+      - name: Build loader frontend
+        working-directory: loader
+        run: npm run build
+
+      - name: Verify production frontend API
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -LiteralPath "loader/dist" -Recurse -File |
+            Where-Object { $_.Extension -in @(".html", ".js", ".css", ".json", ".map") }
+          $content = ($files | ForEach-Object { [IO.File]::ReadAllText($_.FullName) }) -join "`n"
+          $expected = "https://api.yusufgulsafak.com"
+          if (-not $content.Contains($expected)) {
+            throw "Production API origin was not embedded in the frontend output."
+          }
+          $forbidden = @(
+            "example.invalid",
+            "api.your-domain.example",
+            "patch.example.com",
+            "http://localhost",
+            "https://localhost",
+            "http://127.0.0.1",
+            "https://127.0.0.1",
+            "https://yusufgulsafak.com"
+          )
+          foreach ($value in $forbidden) {
+            if ($content.Contains($value)) {
+              throw "Forbidden API origin remains in frontend output: $value"
+            }
+          }
+
+      - name: Test archive recovery on Windows
+        run: cargo test --manifest-path tests/fat-dat-harness/Cargo.toml
+
+      - name: Build archive test utility
+        run: cargo build --release --manifest-path tests/fat-dat-harness/Cargo.toml --bin fat-dat-check
+
+      - name: Upload archive test utility
+        uses: actions/upload-artifact@v4
+        with:
+          name: fat-dat-check
+          path: tests/fat-dat-harness/target/release/fat-dat-check.exe
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path loader/src-tauri/Cargo.toml
+
+      - name: Build Tauri release
+        working-directory: loader
+        run: npm run tauri build -- --config src-tauri/tauri.production.conf.json
+
+      - name: Upload Windows release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: animus-windows-release-${{ github.run_number }}
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            loader/src-tauri/target/release/*.exe
+            loader/src-tauri/target/release/bundle/nsis/*.exe
+            loader/src-tauri/target/release/bundle/msi/*.msi
+
+
+

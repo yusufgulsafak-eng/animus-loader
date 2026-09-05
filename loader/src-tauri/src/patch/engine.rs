@@ -135,6 +135,18 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<()> {
         }
     }
     for action in &manifest.install_actions {
+        if action.kind == ActionType::AppendFatDat {
+            crate::patch::fat_dat::options(action)?;
+            if !version_at_least(&manifest.patch.minimum_loader_version, "0.1.1") {
+                return Err(LoaderError::Manifest("APPEND_FAT_DAT en az Loader 0.1.1 gerektirir".into()));
+            }
+            if manifest.detection.process_name.as_deref().unwrap_or("").trim().is_empty() {
+                return Err(LoaderError::Manifest("FAT/DAT işlemi için oyun process_name gerekli".into()));
+            }
+            if manifest.install_actions.len() != 1 {
+                return Err(LoaderError::Manifest("APPEND_FAT_DAT tek action olmalıdır".into()));
+            }
+        }
         uuid::Uuid::parse_str(&action.id)
             .map_err(|_| LoaderError::Manifest(format!("Action UUID geçersiz: {}", action.id)))?;
         validate_relative(&action.destination)?;
@@ -204,6 +216,12 @@ pub fn dry_run(manifest: &Manifest, game_root: &Path) -> Result<DryRun> {
     for action in &manifest.install_actions {
         let destination = resolve_inside(game_root, &action.destination)?;
         match action.kind {
+            ActionType::AppendFatDat => {
+                result.changed_files += 2;
+                result.backup_files += 2;
+                result.estimated_disk_bytes = result.estimated_disk_bytes.saturating_add(
+                    crate::patch::fat_dat::disk_bytes(action, game_root)?);
+            }
             ActionType::CopyFile | ActionType::ReplaceFile => {
                 if destination.exists() {
                     result.changed_files += 1;
@@ -350,6 +368,21 @@ pub fn install(
         Box::new(MoveHandler),
     ];
     for (index, action) in manifest.install_actions.iter().enumerate() {
+        if action.kind == ActionType::AppendFatDat {
+            let registration = installation_path(manifest.game.id)?;
+            if let Err(error) = crate::patch::fat_dat::install(
+                action, &extracted, game_root, &backup, &mut installation, &registration,
+                manifest.detection.process_name.as_deref(),
+            ) {
+                match rollback_changes(game_root, &backup, &installation.changes) {
+                    Ok(()) => crate::backup::close_installation(&installation)?,
+                    Err(rollback) => return Err(LoaderError::Other(format!(
+                        "{error}. Geri alma da durdu: {rollback}. Yedek korundu: {}", backup.display()))),
+                }
+                return Err(error);
+            }
+            continue;
+        }
         let handler = handlers
             .iter()
             .find(|h| h.supports(action))
@@ -407,7 +440,7 @@ pub fn install(
         );
     }
     if manifest.integrity.verify_after_install {
-        let check = verify_records(game_root, &installation.changes)?;
+        let check = verify_records_with_backup(game_root, &backup, &installation.changes)?;
         if !check.valid {
             let _ = rollback_changes(game_root, &backup, &installation.changes);
             return Err(LoaderError::Integrity(check.conflicts.join(", ")));
@@ -808,6 +841,7 @@ fn rollback_changes(game: &Path, backup: &Path, changes: &[ChangeRecord]) -> Res
     for change in changes.iter().rev() {
         let path = resolve_inside(game, &change.path)?;
         match change.kind {
+            ChangeKind::PatchedArchive => crate::patch::fat_dat::restore(game, backup, change)?,
             ChangeKind::CreatedFile => {
                 if path.is_file() {
                     fs::remove_file(path)?;
@@ -868,7 +902,28 @@ fn verify_records(game: &Path, changes: &[ChangeRecord]) -> Result<Verification>
 }
 pub fn verify_installation(game_id: u64, game_root: &Path) -> Result<Verification> {
     let install: Installation = read_json(&installation_path(game_id)?)?;
-    verify_records(game_root, &install.changes)
+    verify_records_with_backup(game_root, &backup_root(&install.backup_id)?, &install.changes)
+}
+fn verify_records_with_backup(game: &Path, backup: &Path, changes: &[ChangeRecord]) -> Result<Verification> {
+    let mut result = Verification { valid: true, checked: 0, conflicts: vec![] };
+    for change in changes {
+        if change.kind == ChangeKind::PatchedArchive {
+            result.checked += 2;
+            if !crate::patch::fat_dat::verify(game, backup, change)? {
+                result.conflicts.push(change.path.clone());
+                if let Some(fat) = &change.secondary_path { result.conflicts.push(fat.clone()); }
+            }
+        } else {
+            let r = verify_records(game, std::slice::from_ref(change))?;
+            result.checked += r.checked;
+            result.conflicts.extend(r.conflicts);
+        }
+    }
+    result.valid = result.conflicts.is_empty();
+    Ok(result)
+}
+fn is_archive_install(changes: &[ChangeRecord]) -> bool {
+    changes.len() == 1 && changes[0].kind == ChangeKind::PatchedArchive
 }
 /// Onceki kurulumu vanilla haline dondurur. `force`, kullanici dosyalari elle
 /// degistirmis olsa bile yedekten geri yazmaya izin verir.
@@ -895,8 +950,8 @@ fn restore_previous(game_root: &Path, previous: &Installation, force: bool) -> R
         crate::backup::close_installation(previous)?;
         return Ok(());
     }
-    let check = verify_records(game_root, &previous.changes)?;
-    if !check.valid && !force {
+    let check = verify_records_with_backup(game_root, &backup, &previous.changes)?;
+    if !check.valid && !force && !is_archive_install(&previous.changes) {
         return Err(LoaderError::Conflict(format!(
             "Önceki yamanın dosyaları değişmiş: {}. Önce 'Yamayı Kaldır' çalıştırın veya güncellemeyi zorlayın.",
             check.conflicts.join(", ")
@@ -915,8 +970,10 @@ pub fn uninstall(game_id: u64, game_root: &Path, force: bool) -> Result<Uninstal
             "Kurulum manifestindeki oyun kökü farklı".into(),
         ));
     }
-    let check = verify_records(game_root, &install.changes)?;
-    if !check.valid && !force {
+    let check = verify_records_with_backup(game_root, &backup_root(&install.backup_id)?, &install.changes)?;
+    // FAT/DAT restore itself validates the base prefix and known partial suffix;
+    // this also permits recovery after a terminated append without forcing.
+    if !check.valid && !force && !is_archive_install(&install.changes) {
         return Err(LoaderError::Conflict(format!(
             "Dosyalar kurulumdan sonra değişmiş: {}",
             check.conflicts.join(", ")
@@ -1275,3 +1332,5 @@ mod tests {
         assert!(!game.join("Data/turkish.txt").exists());
     }
 }
+
+

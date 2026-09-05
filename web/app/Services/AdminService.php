@@ -172,8 +172,8 @@ final class AdminService
 
     public function saveActions(int $versionId,array $actions,int $actor): void
     {
-        $manifestActions=[];foreach($actions as $i=>$a){$type=$a['type']??'';$id=$a['id']??$this->uuid();$manifestActions[]=['id'=>$id,'type'=>$type,'source'=>$a['source']??null,'destination'=>$a['destination']??'','backup'=>(bool)($a['backup']??true)];}
-        $errors=(new ManifestValidator())->validate(['schema_version'=>1,'game'=>['id'=>1,'slug'=>'validation'],'detection'=>['executable'=>'Validation.exe','required_files'=>[]],'patch'=>['version'=>'0.0.0'],'archive'=>['sha256'=>str_repeat('0',64),'size'=>1],'install_actions'=>$manifestActions,'integrity'=>[],'backup'=>[]]);
+        $manifestActions=[];foreach($actions as $i=>$a){$type=$a['type']??'';$id=$a['id']??$this->uuid();$manifestActions[]=['id'=>$id,'type'=>$type,'source'=>$a['source']??null,'destination'=>$a['destination']??'','backup'=>(bool)($a['backup']??true),'options'=>$a['options']??[],'expected_sha256'=>$a['expected_sha256']??null];}
+        $errors=(new ManifestValidator())->validate(['schema_version'=>1,'game'=>['id'=>1,'slug'=>'validation'],'detection'=>['executable'=>'Validation.exe','process_name'=>'Validation.exe','required_files'=>[]],'patch'=>['version'=>'0.0.0','minimum_loader_version'=>'0.1.1'],'archive'=>['sha256'=>str_repeat('0',64),'size'=>1],'install_actions'=>$manifestActions,'integrity'=>[],'backup'=>[]]);
         if($errors)throw new \DomainException(implode(' ',$errors));
         $pdo=Database::connection();$pdo->beginTransaction();try{$pdo->prepare('DELETE FROM patch_install_actions WHERE patch_version_id=?')->execute([$versionId]);$stmt=$pdo->prepare('INSERT INTO patch_install_actions(patch_version_id,action_uuid,action_type,source_path,destination_path,backup_enabled,expected_sha256,sort_order,options_json) VALUES(?,?,?,?,?,?,?,?,?)');foreach($manifestActions as $i=>$a)$stmt->execute([$versionId,$a['id'],$a['type'],$a['source']?:null,$a['destination'],$a['backup']?1:0,$actions[$i]['expected_sha256']??null,($i+1)*10,json_encode($actions[$i]['options']??new \stdClass())]);$pdo->commit();(new AuditService())->write($actor,'actions.updated','patch_version',$versionId,null,$manifestActions);}catch(\Throwable$e){$pdo->rollBack();throw$e;}
     }
@@ -389,3 +389,5 @@ final class AdminService
     private function slugExists(string $slug):bool{$s=Database::connection()->prepare('SELECT 1 FROM games WHERE slug=?');$s->execute([$slug]);return(bool)$s->fetchColumn();}
     private function uuid():string{$d=random_bytes(16);$d[6]=chr((ord($d[6])&0x0f)|0x40);$d[8]=chr((ord($d[8])&0x3f)|0x80);return vsprintf('%s%s-%s-%s-%s-%s%s%s',str_split(bin2hex($d),4));}
 }
+
+

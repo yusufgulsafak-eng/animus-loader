@@ -77,6 +77,7 @@ pub enum ActionType {
     CreateDirectory,
     MoveFile,
     RenameFile,
+    AppendFatDat,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,6 +97,7 @@ pub enum ChangeKind {
     DeletedFile,
     CreatedDirectory,
     MovedFile,
+    PatchedArchive,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Installation {
@@ -177,3 +179,5 @@ pub struct Progress {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bytes_per_second: Option<u64>,
 }
+
+

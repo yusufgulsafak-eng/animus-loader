@@ -1,6 +1,6 @@
 [package]
 name = "animus-patch-loader"
-version = "0.1.0"
+version = "0.1.1"
 description = "Generic Turkish patch loader"
 authors = ["Animus Patch"]
 edition = "2021"
@@ -50,3 +50,5 @@ ed25519-dalek = { version = "2", features = ["rand_core"] }
 rand = "0.8"
 base64 = "0.22"
 zeroize = "1"
+
+
