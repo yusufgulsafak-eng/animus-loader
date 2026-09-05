@@ -2,16 +2,12 @@
   color-scheme: dark;
 }
 
-/*
-  Ana loader arka planı.
-  Splash kapandıktan sonra HTML canvas'ın gri (#151517) kalmasını önler.
-*/
 html {
   margin: 0;
   width: 100%;
   min-width: 100%;
   min-height: 100%;
-  background: #08070c;
+  background: #17181b;
 }
 
 body {
@@ -19,16 +15,12 @@ body {
   width: 100%;
   min-width: 100%;
   min-height: 100%;
-  background: var(--bg, #08070c);
+  background: var(--bg, #17181b);
 }
 
-/*
-  Splash açıkken sadece body kilitlenir.
-  #151517 rengi ana uygulamaya kalıcı olarak uygulanmaz.
-*/
 body.splash-active {
   overflow: hidden;
-  background: #151517;
+  background: #1b1c20;
 }
 
 .startup-splash {
@@ -37,23 +29,12 @@ body.splash-active {
   z-index: 2147483647;
   overflow: hidden;
   background:
-    radial-gradient(
-      circle at 50% 43%,
-      rgba(120, 20, 12, 0.16) 0%,
-      rgba(45, 16, 15, 0.08) 24%,
-      rgba(21, 21, 23, 0) 52%
-    ),
-    linear-gradient(
-      180deg,
-      #1a1a1c 0%,
-      #151517 100%
-    );
+    radial-gradient(circle at 50% 42%, rgba(255,255,255,.035) 0%, rgba(255,255,255,.014) 28%, transparent 58%),
+    linear-gradient(180deg, #222328 0%, #1c1d21 52%, #18191d 100%);
   opacity: 1;
   visibility: visible;
   pointer-events: all;
-  transition:
-    opacity 420ms ease,
-    visibility 420ms ease;
+  transition: opacity 320ms ease, visibility 320ms ease;
 }
 
 .startup-splash::before {
@@ -62,12 +43,8 @@ body.splash-active {
   inset: 0;
   pointer-events: none;
   background:
-    radial-gradient(
-      circle at center,
-      transparent 30%,
-      rgba(0, 0, 0, 0.13) 72%,
-      rgba(0, 0, 0, 0.30) 100%
-    );
+    linear-gradient(90deg, rgba(255,255,255,.018), transparent 24%, transparent 76%, rgba(0,0,0,.08)),
+    radial-gradient(circle at center, transparent 36%, rgba(0,0,0,.12) 76%, rgba(0,0,0,.26) 100%);
 }
 
 .startup-splash.is-leaving {
@@ -96,15 +73,10 @@ body.splash-active {
   -webkit-user-drag: none;
   transform-origin: 50% 52%;
   opacity: 0;
-
   animation:
-    animus-logo-intro 720ms cubic-bezier(0.16, 1, 0.3, 1) forwards,
-    animus-logo-breathe 2400ms ease-in-out 720ms infinite;
-
-  will-change:
-    transform,
-    opacity,
-    filter;
+    animus-logo-intro 620ms cubic-bezier(0.16, 1, 0.3, 1) forwards,
+    animus-logo-breathe 2600ms ease-in-out 620ms infinite;
+  will-change: transform, opacity, filter;
 }
 
 .startup-splash-brand {
@@ -117,8 +89,7 @@ body.splash-active {
   gap: 13px;
   opacity: 0;
   white-space: nowrap;
-  animation:
-    animus-brand-in 620ms ease 420ms forwards;
+  animation: animus-brand-in 520ms ease 320ms forwards;
 }
 
 .startup-splash-brand-logo {
@@ -127,145 +98,68 @@ body.splash-active {
   object-fit: contain;
   user-select: none;
   -webkit-user-drag: none;
-  filter:
-    drop-shadow(
-      0 0 7px rgba(255, 64, 32, 0.20)
-    );
+  filter: drop-shadow(0 0 8px rgba(255, 64, 32, 0.18));
 }
 
 .startup-splash-divider {
   width: 1px;
   height: 31px;
-  background:
-    rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.18);
 }
 
 .startup-splash-name {
-  color:
-    rgba(242, 239, 238, 0.88);
-  font-family:
-    "Segoe UI Variable Text",
-    "Segoe UI",
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    sans-serif;
-  font-size: 22px;
-  font-weight: 400;
+  color: rgba(242, 243, 245, 0.90);
+  font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 21px;
+  font-weight: 500;
   letter-spacing: 0.01em;
-  text-rendering:
-    geometricPrecision;
+  text-rendering: geometricPrecision;
 }
 
 @keyframes animus-logo-intro {
   0% {
     opacity: 0;
-    transform:
-      translateY(7px)
-      scale(0.86);
-    filter:
-      drop-shadow(
-        0 0 0 rgba(255, 45, 20, 0)
-      )
-      brightness(0.82);
+    transform: translateY(5px) scale(0.90);
+    filter: drop-shadow(0 0 0 rgba(255,45,20,0)) brightness(.86);
   }
-
-  65% {
-    opacity: 1;
-  }
-
+  68% { opacity: 1; }
   100% {
     opacity: 1;
-    transform:
-      translateY(0)
-      scale(1);
-    filter:
-      drop-shadow(
-        0 0 17px rgba(255, 50, 24, 0.30)
-      )
-      brightness(1);
+    transform: translateY(0) scale(1);
+    filter: drop-shadow(0 0 15px rgba(255,50,24,.24)) brightness(1);
   }
 }
 
 @keyframes animus-logo-breathe {
-  0%,
-  100% {
+  0%,100% {
     opacity: 1;
-    transform:
-      translateY(0)
-      scale(1);
-    filter:
-      drop-shadow(
-        0 0 15px rgba(255, 45, 20, 0.25)
-      )
-      brightness(1);
+    transform: translateY(0) scale(1);
+    filter: drop-shadow(0 0 13px rgba(255,45,20,.20)) brightness(1);
   }
-
   50% {
     opacity: 1;
-    transform:
-      translateY(-4px)
-      scale(1.022);
-    filter:
-      drop-shadow(
-        0 0 27px rgba(255, 52, 22, 0.43)
-      )
-      brightness(1.055);
+    transform: translateY(-3px) scale(1.016);
+    filter: drop-shadow(0 0 23px rgba(255,52,22,.34)) brightness(1.035);
   }
 }
 
 @keyframes animus-brand-in {
-  from {
-    opacity: 0;
-    transform:
-      translate(-50%, 7px);
-  }
-
-  to {
-    opacity: 1;
-    transform:
-      translate(-50%, 0);
-  }
+  from { opacity:0; transform:translate(-50%,6px); }
+  to { opacity:1; transform:translate(-50%,0); }
 }
 
 @media (max-width: 900px) {
-  .startup-splash-center {
-    width: min(45vw, 360px);
-  }
-
-  .startup-splash-name {
-    font-size: 19px;
-  }
+  .startup-splash-center { width:min(45vw,360px); }
+  .startup-splash-name { font-size:18px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .startup-splash-logo {
-    animation:
-      animus-logo-reduced 180ms ease forwards;
-  }
-
-  .startup-splash-brand {
-    animation:
-      animus-brand-in 180ms ease forwards;
-  }
-
-  .startup-splash {
-    transition-duration:
-      120ms;
-  }
+  .startup-splash-logo { animation:animus-logo-reduced 160ms ease forwards; }
+  .startup-splash-brand { animation:animus-brand-in 160ms ease forwards; }
+  .startup-splash { transition-duration:100ms; }
 }
 
 @keyframes animus-logo-reduced {
-  from {
-    opacity: 0;
-  }
-
-  to {
-    opacity: 1;
-    transform: none;
-    filter:
-      drop-shadow(
-        0 0 17px rgba(255, 50, 24, 0.30)
-      );
-  }
+  from { opacity:0; }
+  to { opacity:1; transform:none; filter:drop-shadow(0 0 15px rgba(255,50,24,.24)); }
 }
