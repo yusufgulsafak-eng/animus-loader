@@ -27,6 +27,46 @@ final class CatalogService
         return array_map([$this,'shapeGame'], $stmt->fetchAll());
     }
 
+    public function publicGames(array $filters = []): array
+    {
+        $sql = "SELECT
+                    g.id,g.name,g.slug,g.short_description,g.cover_url,g.banner_url,
+                    g.cover_path,g.banner_path,g.local_cover_path,g.local_banner_path,
+                    g.access_type,g.translation_percent,g.supported_stores
+                FROM games g
+                WHERE g.is_active=1";
+        $params = [];
+        if (!empty($filters['q'])) {
+            $sql .= ' AND (g.name LIKE ? OR g.slug LIKE ?)';
+            $q = '%'.$filters['q'].'%';
+            $params[] = $q;
+            $params[] = $q;
+        }
+        if (!empty($filters['access']) && in_array($filters['access'], ['free','premium'], true)) {
+            $sql .= ' AND g.access_type=?';
+            $params[] = $filters['access'];
+        }
+        $sql .= ' ORDER BY g.name LIMIT 500';
+        $stmt = Database::connection()->prepare($sql);
+        $stmt->execute($params);
+
+        return array_map(static function(array $row): array {
+            $cover = $row['local_cover_path'] ?: ($row['cover_url'] ?: ($row['cover_path'] ?: '/assets/placeholders/cover-generic.svg'));
+            $banner = $row['local_banner_path'] ?: ($row['banner_url'] ?: ($row['banner_path'] ?: '/assets/placeholders/banner-generic.svg'));
+            return [
+                'id' => (int)$row['id'],
+                'name' => (string)$row['name'],
+                'slug' => (string)$row['slug'],
+                'short_description' => (string)($row['short_description'] ?? ''),
+                'cover_path' => $cover,
+                'banner_path' => $banner,
+                'access_type' => in_array($row['access_type'] ?? 'free', ['free','premium'], true) ? $row['access_type'] : 'free',
+                'translation_percent' => max(0, min(100, (int)($row['translation_percent'] ?? 0))),
+                'supported_stores' => json_decode($row['supported_stores'] ?? '[]', true) ?: [],
+            ];
+        }, $stmt->fetchAll());
+    }
+
     public function game(int $id, array $user): ?array
     {
         foreach ($this->games($user) as $game) if ((int)$game['id']===$id) {
