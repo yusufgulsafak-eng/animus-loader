@@ -73,13 +73,17 @@ async function initialize(){localStorage.removeItem("loader_token");await authSe
 export const api={
   initialize,
   async login(email:string,password:string,remember=true){
-    const result=await request<{user:User;token:string;device?:DeviceInfo}>("/auth/login",{method:"POST",body:JSON.stringify({email,password,device_id:deviceId(),device_name:deviceName()})});
+    const id=deviceId();
+    if(!id)throw new ApiError("Cihaz kimliği oluşturulamadı.");
+    const result=await request<{user:User;token:string;device?:DeviceInfo}>("/auth/login",{method:"POST",body:JSON.stringify({email,password,device_id:id,device_uuid:id,device_name:deviceName()})});
     await authSession.accept(result.token,remember);
     await log("info","login",result.device?`Kullanıcı ve cihaz doğrulandı: ${result.device.device_name}`:"Kullanıcı doğrulandı; sunucu cihaz bağı eski API uyumluluğunda çalışıyor.");
     return result.user;
   },
   async register(displayName:string,email:string,password:string){
-    const result=await request<{user:User;token:string;message:string;device?:DeviceInfo}>("/auth/register",{method:"POST",body:JSON.stringify({display_name:displayName,email,password,device_id:deviceId(),device_name:deviceName()})});
+    const id=deviceId();
+    if(!id)throw new ApiError("Cihaz kimliği oluşturulamadı.");
+    const result=await request<{user:User;token:string;message:string;device?:DeviceInfo}>("/auth/register",{method:"POST",body:JSON.stringify({display_name:displayName,email,password,device_id:id,device_uuid:id,device_name:deviceName()})});
     await authSession.accept(result.token,true);
     await log("info","login",result.device?`Kullanıcı kaydı ve cihaz aktivasyonu başarılı: ${result.device.device_name}`:"Kullanıcı kaydı başarılı; sunucu eski API uyumluluğunda çalışıyor.");
     return result.user;
