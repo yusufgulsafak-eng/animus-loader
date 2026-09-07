@@ -1,4 +1,5 @@
 const DEVICE_KEY="animus_device_uuid_v1";
+let memoryDeviceId="";
 
 function uuidV4():string{
   if(typeof crypto!=="undefined"&&typeof crypto.randomUUID==="function")return crypto.randomUUID();
@@ -7,11 +8,20 @@ function uuidV4():string{
   return `${hex.slice(0,4).join("")}-${hex.slice(4,6).join("")}-${hex.slice(6,8).join("")}-${hex.slice(8,10).join("")}-${hex.slice(10,16).join("")}`;
 }
 
+function validUuid(value:string):boolean{
+  return /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value);
+}
+
 export function deviceId():string{
-  let value=localStorage.getItem(DEVICE_KEY)?.trim().toLowerCase()||"";
-  if(!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value)){
+  let value="";
+  try{value=localStorage.getItem(DEVICE_KEY)?.trim().toLowerCase()||""}catch{}
+  if(!validUuid(value))value=memoryDeviceId;
+  if(!validUuid(value)){
     value=uuidV4().toLowerCase();
-    localStorage.setItem(DEVICE_KEY,value);
+    memoryDeviceId=value;
+    try{localStorage.setItem(DEVICE_KEY,value)}catch{}
+  }else{
+    memoryDeviceId=value;
   }
   return value;
 }
@@ -22,5 +32,6 @@ export function deviceName():string{
 }
 
 export function clearDeviceIdentity():void{
-  localStorage.removeItem(DEVICE_KEY);
+  memoryDeviceId="";
+  try{localStorage.removeItem(DEVICE_KEY)}catch{}
 }
