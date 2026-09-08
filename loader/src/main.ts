@@ -600,7 +600,9 @@ async function showGame(summary:Game){
   const ps=psConfig(game);
   const stores=ps?`${ps.platformLabel} · Animus Emu`:(game.supported_stores||[]).join(" · ")||"Manuel";
   const noPatch=!game.patch_version_id;
-  const rootPath=installations.root(game.id)||localStorage.getItem("root_"+game.id)||"";
+  const rootPath=record
+    ? (record.root_exists?record.game_root:"")
+    : (localStorage.getItem("root_"+game.id)||"");
   const blocked=!meetsMinimum(state.loaderVersion,game.minimum_loader_version);
 
   const pathSection=ps
@@ -648,14 +650,56 @@ async function ensureRoot(game:Game){
     return managedPsRoot(game);
   }
 
-  // Normal PC oyunlarında mevcut davranış aynen devam eder.
-  let root=installations.root(game.id)||localStorage.getItem("root_"+game.id);
+  const record=installations.get(game.id);
   const required=game.executable?[game.executable]:[];
+  const storageKey="root_"+game.id;
+
+  // Journal kaydındaki klasör gerçekten mevcutsa onu kullan.
+  // Oyun silinmiş/taşınmışsa eski journal yolunu körlemesine kullanma.
+  let root:string|null=record?.root_exists
+    ? (record.game_root||null)
+    : null;
+
+  // Journal yoksa daha önce manuel seçilmiş yolu deneyebiliriz.
+  // Orphan journal varsa localStorage'daki eski yol da temizlenir.
+  if(!record){
+    root=root||localStorage.getItem(storageKey);
+  }else if(!record.root_exists){
+    localStorage.removeItem(storageKey);
+  }
+
+  // Kaydedilmiş/manual yol artık geçersiz olmuş olabilir.
+  // Rust tarafındaki aynı güvenli oyun-kökü doğrulamasını burada da çalıştır.
+  if(root){
+    try{
+      await invoke("validate_game_root",{
+        gameRoot:root,
+        requiredFiles:required
+      });
+    }catch{
+      localStorage.removeItem(storageKey);
+      root=null;
+    }
+  }
+
+  // Steam oyunuysa geçerli kurulum klasörünü yeniden otomatik bulmayı dene.
   if(!root&&game.steam_app_id){
     root=await patchService.detectGame(game.steam_app_id,required);
-    if(root)localStorage.setItem("root_"+game.id,root);
+    if(root)localStorage.setItem(storageKey,root);
   }
-  if(!root)throw new Error("Oyun dizini bulunamadı. Lütfen oyun klasörünü manuel seçin.");
+
+  if(!root){
+    if(record&&!record.root_exists){
+      throw new Error(
+        "Oyun klasörü bulunamadı. Oyun silinmiş veya taşınmış olabilir. Oyunu yeniden kurduktan sonra oyun klasörünü tekrar seçin."
+      );
+    }
+
+    throw new Error(
+      "Oyun dizini bulunamadı. Lütfen OYUN KLASÖRÜNÜ SEÇ ile geçerli oyun klasörünü seçin."
+    );
+  }
+
   return root;
 }
 async function operation(task:(root:string)=>Promise<unknown>,success:string,done?:()=>void){
