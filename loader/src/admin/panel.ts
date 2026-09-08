@@ -226,9 +226,9 @@ function usersView(users:AdminUser[]):string{
     <td><select class="user-role">${roles.map(role=>`<option${selected(role,user.role)}>${role}</option>`).join("")}</select></td>
     <td><select class="user-channel">${channels.map(channel=>`<option${selected(channel,user.release_channel)}>${channel}</option>`).join("")}</select></td>
     <td><select class="user-status">${statuses.map(status=>`<option${selected(status,user.status)}>${status}</option>`).join("")}</select></td>
-    <td class="admin-actions"><button data-user-save="${user.id}">Kaydet</button><button class="danger" data-user-delete="${user.id}" data-label="${escapeHtml(user.email)}">Sil</button></td>
+    <td class="admin-actions"><button data-user-save="${user.id}">Kaydet</button><button data-user-device-reset="${user.id}" data-email="${escapeHtml(user.email)}">Cihaz/API Sıfırla</button><button class="danger" data-user-delete="${user.id}" data-label="${escapeHtml(user.email)}">Sil</button></td>
   </tr>`).join("");
-  return `<div class="admin-card admin-note"><b>Kullanıcı silme</b><p>Kalıcı silme yalnız süper adminlere açıktır. Abonelikler ve oturum anahtarları birlikte silinir; indirme geçmişi anonimleştirilerek korunur.</p></div>
+  return `<div class="admin-card admin-note"><b>Kullanıcı / cihaz yönetimi</b><p><b>Cihaz/API Sıfırla</b>, format atan veya bilgisayar değiştiren kullanıcının cihaz eşleştirmesini ve aktif API oturumlarını temizler. Kullanıcı bir sonraki girişinde kullandığı bilgisayarı yeniden bağlar. Kalıcı kullanıcı silme yalnız süper adminlere açıktır.</p></div>
     <div class="admin-table-wrap"><table><thead><tr><th>Kullanıcı</th><th>Rol</th><th>Kanal</th><th>Durum</th><th>İşlem</th></tr></thead><tbody>${rows||'<tr><td colspan="5">Kullanıcı yok.</td></tr>'}</tbody></table></div>`;
 }
 
@@ -287,6 +287,20 @@ function bindUsers(host:HTMLElement,data:AdminPanelData,run:(task:()=>Promise<un
       status:(row.querySelector(".user-status") as HTMLSelectElement).value
     }}),"Kullanıcı güncellendi.");
   });
+  host.querySelectorAll<HTMLButtonElement>("[data-user-device-reset]").forEach(button=>button.onclick=()=>{
+    const id=Number(button.dataset.userDeviceReset);
+    const email=button.dataset.email||"Kullanıcı";
+    if(!id)return;
+    if(!confirm(
+      `${email}\n\nBu kullanıcının cihaz eşleştirmesi ve tüm API oturumları sıfırlanacak.\n\nKullanıcı tekrar giriş yaptığında kullandığı bilgisayar yeni cihaz olarak bağlanacak.\n\nDevam edilsin mi?`
+    ))return;
+    void run(
+      ()=>api.adminAction("reset_user_device",{user_id:id}),
+      "Cihaz/API eşleştirmesi sıfırlandı.",
+      true
+    );
+  });
+
   host.querySelectorAll<HTMLButtonElement>("[data-user-delete]").forEach(button=>button.onclick=()=>{
     const id=Number(button.dataset.userDelete);
     const user=(data.users||[]).find(item=>item.id===id);
