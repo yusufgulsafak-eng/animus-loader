@@ -375,7 +375,169 @@ pub fn clear_cache() -> Result<u64> {
     Ok(freed)
 }
 
+const DOWNLOAD_MAX_ATTEMPTS: usize = 5;
+
+fn is_retryable_download_error(
+    error: &LoaderError,
+) -> bool {
+    match error {
+        LoaderError::Http(error) => {
+            if let Some(status) = error.status() {
+                return status.is_server_error()
+                    || status
+                        == reqwest::StatusCode::TOO_MANY_REQUESTS
+                    || status
+                        == reqwest::StatusCode::REQUEST_TIMEOUT;
+            }
+
+            error.is_timeout()
+                || error.is_connect()
+                || error.is_body()
+                || error.is_request()
+        }
+        LoaderError::Io(error) => {
+            let message = error
+                .to_string()
+                .to_ascii_lowercase();
+
+            matches!(
+                error.kind(),
+                std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::TimedOut
+                    | std::io::ErrorKind::UnexpectedEof
+                    | std::io::ErrorKind::WouldBlock
+                    | std::io::ErrorKind::Interrupted
+            ) || message.contains(
+                "request or response body",
+            ) || message.contains(
+                "connection closed",
+            ) || message.contains(
+                "connection reset",
+            ) || message.contains(
+                "unexpected eof",
+            )
+        }
+        LoaderError::Other(message) => {
+            let message =
+                message.to_ascii_lowercase();
+
+            message.contains(
+                "beklenenden erken kapandı",
+            ) || message.contains(
+                "geçici indirme hatası",
+            )
+        }
+        _ => false,
+    }
+}
+
+fn retry_delay_seconds(
+    completed_attempt: usize,
+) -> u64 {
+    match completed_attempt {
+        0 | 1 => 2,
+        2 => 4,
+        3 => 8,
+        _ => 12,
+    }
+}
+
 pub fn download(
+    app: &AppHandle,
+    url: &str,
+    target: &Path,
+    expected_size: u64,
+    expected_hash: &str,
+) -> Result<()> {
+    for attempt in 1..=DOWNLOAD_MAX_ATTEMPTS {
+        match download_once(
+            app,
+            url,
+            target,
+            expected_size,
+            expected_hash,
+        ) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                if !is_retryable_download_error(
+                    &error,
+                ) {
+                    return Err(error);
+                }
+
+                if attempt >= DOWNLOAD_MAX_ATTEMPTS {
+                    return Err(
+                        LoaderError::Other(
+                            format!(
+                                "Yama indirmesi {DOWNLOAD_MAX_ATTEMPTS} denemeden sonra tamamlanamadı. Bağlantı veya MediaFire CDN aktarımı kesiliyor. Son hata: {error}"
+                            ),
+                        ),
+                    );
+                }
+
+                let downloaded =
+                    std::fs::metadata(target)
+                        .map(|metadata| {
+                            metadata
+                                .len()
+                                .min(expected_size)
+                        })
+                        .unwrap_or(0);
+
+                let percent = (
+                    downloaded
+                        .saturating_mul(50)
+                        / expected_size.max(1)
+                )
+                    .min(50)
+                    as u8;
+
+                let next_attempt = attempt + 1;
+
+                let _ = crate::logging::event(
+                    "warn",
+                    "download",
+                    &format!(
+                        "İndirme bağlantısı kesildi; otomatik yeniden deneme {next_attempt}/{DOWNLOAD_MAX_ATTEMPTS}: {error}"
+                    ),
+                );
+
+                let _ = app.emit(
+                    "patch-progress",
+                    Progress {
+                        stage: "download".into(),
+                        percent,
+                        message: format!(
+                            "İndirme bağlantısı yenileniyor ({next_attempt}/{DOWNLOAD_MAX_ATTEMPTS})"
+                        ),
+                        downloaded_bytes:
+                            Some(downloaded),
+                        total_bytes:
+                            Some(expected_size),
+                        bytes_per_second: None,
+                    },
+                );
+
+                std::thread::sleep(
+                    std::time::Duration::from_secs(
+                        retry_delay_seconds(
+                            attempt,
+                        ),
+                    ),
+                );
+            }
+        }
+    }
+
+    Err(LoaderError::Other(
+        "İndirme yeniden deneme sınırı aşıldı."
+            .into(),
+    ))
+}
+
+fn download_once(
     app: &AppHandle,
     url: &str,
     target: &Path,
@@ -679,12 +841,25 @@ pub fn download(
     output.sync_all()?;
 
     if downloaded != expected_size {
-        let _ =
-            std::fs::remove_file(target);
+        if downloaded > expected_size {
+            let _ =
+                std::fs::remove_file(target);
 
-        return Err(LoaderError::Integrity(
+            return Err(
+                LoaderError::Integrity(
+                    format!(
+                        "İndirilen dosya boyutu uyuşmuyor. Beklenen: {expected_size} bayt, indirilen: {downloaded} bayt"
+                    ),
+                ),
+            );
+        }
+
+        // Sunucu temiz EOF döndürerek bağlantıyı erken kapatırsa kısmi ZIP'i
+        // silme. Üstteki retry katmanı yeni bir MediaFire CDN URL'si çözüp
+        // Range isteğiyle kaldığı bayttan devam eder.
+        return Err(LoaderError::Other(
             format!(
-                "İndirilen dosya boyutu uyuşmuyor. Beklenen: {expected_size} bayt, indirilen: {downloaded} bayt"
+                "İndirme bağlantısı beklenenden erken kapandı. Beklenen: {expected_size} bayt, indirilen: {downloaded} bayt"
             ),
         ));
     }
