@@ -10,17 +10,18 @@ jobs:
   windows-release:
     name: Build Windows release
     runs-on: windows-latest
+
     env:
       VITE_API_BASE_URL: https://animus-api.intelpol.workers.dev
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      - name: Set up Node.js LTS
-        uses: actions/setup-node@v4
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v7
         with:
-          node-version: lts/*
+          node-version: "24"
           cache: npm
           cache-dependency-path: loader/package-lock.json
 
@@ -96,11 +97,17 @@ jobs:
         run: |
           $files = Get-ChildItem -LiteralPath "loader/dist" -Recurse -File |
             Where-Object { $_.Extension -in @(".html", ".js", ".css", ".json", ".map") }
-          $content = ($files | ForEach-Object { [IO.File]::ReadAllText($_.FullName) }) -join "`n"
+
+          $content = ($files | ForEach-Object {
+            [IO.File]::ReadAllText($_.FullName)
+          }) -join "`n"
+
           $expected = "https://animus-api.intelpol.workers.dev"
+
           if (-not $content.Contains($expected)) {
             throw "Production API origin was not embedded in the frontend output."
           }
+
           $forbidden = @(
             "example.invalid",
             "api.your-domain.example",
@@ -112,6 +119,7 @@ jobs:
             "https://api.yusufgulsafak.com",
             "https://yusufgulsafak.com"
           )
+
           foreach ($value in $forbidden) {
             if ($content.Contains($value)) {
               throw "Forbidden API origin remains in frontend output: $value"
@@ -126,7 +134,7 @@ jobs:
         run: npm run tauri build -- --config src-tauri/tauri.production.conf.json
 
       - name: Upload Windows release artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: animus-windows-release-${{ github.run_number }}
           if-no-files-found: error
