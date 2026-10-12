@@ -352,7 +352,10 @@
                 "const": false
               },
               "expected_sha256": {
-                "const": "83848a9cf76b60db8577e1978a0bab9c271a5a4a3a3a32a205614a7b69b0b9b8"
+                "enum": [
+                  "83848a9cf76b60db8577e1978a0bab9c271a5a4a3a3a32a205614a7b69b0b9b8",
+                  "7016526b403eff2374a2874274a29bae97fff14daa10682d230f32716d2ff463"
+                ]
               }
             }
           }
