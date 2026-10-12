@@ -173,7 +173,12 @@ final class AdminService
     public function saveActions(int $versionId,array $actions,int $actor): void
     {
         $manifestActions=[];foreach($actions as $i=>$a){$type=$a['type']??'';$id=$a['id']??$this->uuid();$manifestActions[]=['id'=>$id,'type'=>$type,'source'=>$a['source']??null,'destination'=>$a['destination']??'','backup'=>(bool)($a['backup']??true),'options'=>$a['options']??[],'expected_sha256'=>$a['expected_sha256']??null];}
-        $errors=(new ManifestValidator())->validate(['schema_version'=>1,'game'=>['id'=>1,'slug'=>'validation'],'detection'=>['executable'=>'Validation.exe','process_name'=>'Validation.exe','required_files'=>[]],'patch'=>['version'=>'0.0.0','minimum_loader_version'=>'0.1.1'],'archive'=>['sha256'=>str_repeat('0',64),'size'=>1],'install_actions'=>$manifestActions,'integrity'=>[],'backup'=>[]]);
+        $pdo=Database::connection();
+        $version=$pdo->prepare('SELECT g.slug,pv.minimum_loader_version FROM patch_versions pv JOIN patches p ON p.id=pv.patch_id JOIN games g ON g.id=p.game_id WHERE pv.id=?');
+        $version->execute([$versionId]);
+        $versionData=$version->fetch();
+        if (!$versionData) throw new \DomainException('Patch surumu bulunamadi.');
+        $errors=(new ManifestValidator())->validate(['schema_version'=>1,'game'=>['id'=>1,'slug'=>$versionData['slug']],'detection'=>['executable'=>'Validation.exe','process_name'=>'Validation.exe','required_files'=>[]],'patch'=>['version'=>'0.0.0','minimum_loader_version'=>$versionData['minimum_loader_version']],'archive'=>['sha256'=>str_repeat('0',64),'size'=>1],'install_actions'=>$manifestActions,'integrity'=>[],'backup'=>[]]);
         if($errors)throw new \DomainException(implode(' ',$errors));
         $pdo=Database::connection();$pdo->beginTransaction();try{$pdo->prepare('DELETE FROM patch_install_actions WHERE patch_version_id=?')->execute([$versionId]);$stmt=$pdo->prepare('INSERT INTO patch_install_actions(patch_version_id,action_uuid,action_type,source_path,destination_path,backup_enabled,expected_sha256,sort_order,options_json) VALUES(?,?,?,?,?,?,?,?,?)');foreach($manifestActions as $i=>$a)$stmt->execute([$versionId,$a['id'],$a['type'],$a['source']?:null,$a['destination'],$a['backup']?1:0,$actions[$i]['expected_sha256']??null,($i+1)*10,json_encode($actions[$i]['options']??new \stdClass())]);$pdo->commit();(new AuditService())->write($actor,'actions.updated','patch_version',$versionId,null,$manifestActions);}catch(\Throwable$e){$pdo->rollBack();throw$e;}
     }
