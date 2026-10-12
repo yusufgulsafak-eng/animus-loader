@@ -106,7 +106,7 @@
     } catch (error) { toast(error.message, true); }
   });
 
-  const types = ['COPY_FILE','COPY_DIRECTORY','REPLACE_FILE','DELETE_FILE','DELETE_DIRECTORY','CREATE_DIRECTORY','MOVE_FILE','RENAME_FILE','APPEND_FAT_DAT'];
+  const types = ['COPY_FILE','COPY_DIRECTORY','REPLACE_FILE','DELETE_FILE','DELETE_DIRECTORY','CREATE_DIRECTORY','MOVE_FILE','RENAME_FILE','APPEND_FAT_DAT','RUN_BAT'];
   const escapeAttribute = value => String(value || '').replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;');
   const addAction = (value = {}) => {
     const row = document.createElement('div');
@@ -118,6 +118,7 @@
     row.innerHTML = '<select class="action-type">' + options + '</select>' +
       '<input class="action-source" list="archive-files" placeholder="Archive/game source path" value="' + escapeAttribute(value.source) + '">' +
       '<input class="action-destination" placeholder="Game root relative destination" value="' + escapeAttribute(value.destination) + '">' +
+      '<input class="action-sha256" placeholder="RUN_BAT script SHA-256" value="' + escapeAttribute(value.expected_sha256 || '') + '">' +
       '<label class="switch"><input class="action-backup" type="checkbox" ' + (value.backup !== false ? 'checked' : '') + '> Backup</label>' +
       '<textarea class="action-options" aria-label="FAT/DAT kurulum seçenekleri" placeholder="FAT/DAT seçenekleri (JSON)">' + escapeAttribute(JSON.stringify(value.options || {}, null, 2)) + '</textarea>' +
       '<button class="icon-btn remove-action">Sil</button>';
@@ -148,7 +149,7 @@
     backup: row.querySelector('.action-backup').checked,
     options: row.querySelector('.action-type').value === 'APPEND_FAT_DAT'
       ? JSON.parse(row.querySelector('.action-options').value || '{}') : JSON.parse(row.dataset.options || '{}'),
-    expected_sha256: row.dataset.expectedHash || null
+    expected_sha256: row.querySelector('.action-sha256').value || null
   }));
   document.querySelector('#save-actions')?.addEventListener('click', async () => {
     try { await api({action:'save_actions',version_id:Number(document.querySelector('#builder-version-id').value),actions:collectActions()}); toast('Action listesi kaydedildi'); }
