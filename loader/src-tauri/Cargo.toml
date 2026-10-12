@@ -1,6 +1,6 @@
 [package]
 name = "animus-patch-loader"
-version = "0.1.2"
+version = "0.1.3"
 description = "Generic Turkish patch loader"
 authors = ["Animus Patch"]
 edition = "2021"
