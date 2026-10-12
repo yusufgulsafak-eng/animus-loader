@@ -107,6 +107,8 @@
   });
 
   const types = ['COPY_FILE','COPY_DIRECTORY','REPLACE_FILE','DELETE_FILE','DELETE_DIRECTORY','CREATE_DIRECTORY','MOVE_FILE','RENAME_FILE','APPEND_FAT_DAT','RUN_BAT'];
+  // Yalnizca bu hash ile dogrulanan Battlefield V Install.bat desteklenir.
+  const BFV_INSTALL_BAT_SHA256 = '83848a9cf76b60db8577e1978a0bab9c271a5a4a3a3a32a205614a7b69b0b9b8';
   const escapeAttribute = value => String(value || '').replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;');
   const addAction = (value = {}) => {
     const row = document.createElement('div');
@@ -122,8 +124,19 @@
       '<label class="switch"><input class="action-backup" type="checkbox" ' + (value.backup !== false ? 'checked' : '') + '> Backup</label>' +
       '<textarea class="action-options" aria-label="FAT/DAT kurulum seçenekleri" placeholder="FAT/DAT seçenekleri (JSON)">' + escapeAttribute(JSON.stringify(value.options || {}, null, 2)) + '</textarea>' +
       '<button class="icon-btn remove-action">Sil</button>';
-    const updateOptionsVisibility = () => { row.querySelector('.action-options').hidden = row.querySelector('.action-type').value !== 'APPEND_FAT_DAT'; };
-    row.querySelector('.action-type').addEventListener('change', updateOptionsVisibility);
+    const updateOptionsVisibility = (typeChanged = false) => {
+      const type = row.querySelector('.action-type').value;
+      row.querySelector('.action-options').hidden = type !== 'APPEND_FAT_DAT';
+      // Sadece kullanici RUN_BAT tipini secince varsayilanlari ata;
+      // mevcut kayitlari yuklerken alanlarin uzerine yazma.
+      if (typeChanged && type === 'RUN_BAT') {
+        row.querySelector('.action-source').value = 'Install.bat';
+        row.querySelector('.action-destination').value = 'Install.bat';
+        row.querySelector('.action-sha256').value = BFV_INSTALL_BAT_SHA256;
+        row.querySelector('.action-backup').checked = false;
+      }
+    };
+    row.querySelector('.action-type').addEventListener('change', () => updateOptionsVisibility(true));
     updateOptionsVisibility();
     row.querySelector('.remove-action').onclick = () => row.remove();
     document.querySelector('#action-list').append(row);
@@ -133,7 +146,13 @@
     id=Number(id);if(!id)throw new Error('Geçerli Patch Version ID girin.');
     const data=await api({action:'load_patch_builder',version_id:id});
     document.querySelector('#builder-version-id').value=id;
-    const tree=data.file_tree||[];
+    // ZIP yuklemeleri {path,size,directory}, harici arsiv SQL'i ise
+    // 'Data/' ve 'Install.bat' gibi string yollar saklayabiliyor.
+    const tree=(Array.isArray(data.file_tree)?data.file_tree:[])
+      .map(item=>typeof item==='string'
+        ? {path:item,size:0,directory:item.endsWith('/')}
+        : item)
+      .filter(item=>item && typeof item.path==='string');
     document.querySelector('#archive-tree').innerHTML=tree.length?'<b>ZIP içeriği</b><ul>'+tree.map(item=>'<li><code>'+escapeAttribute(item.path)+'</code> <small>'+Number(item.size||0).toLocaleString('tr-TR')+' bayt</small></li>').join('')+'</ul>':'<small>Arşiv dosya ağacı boş.</small>';
     document.querySelector('#archive-files').innerHTML=tree.filter(item=>!item.directory).map(item=>'<option value="'+escapeAttribute(item.path)+'"></option>').join('');
     document.querySelector('#action-list').innerHTML='';
