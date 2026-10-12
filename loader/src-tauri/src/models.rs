@@ -78,6 +78,7 @@ pub enum ActionType {
     MoveFile,
     RenameFile,
     AppendFatDat,
+    RunBat,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,6 +99,7 @@ pub enum ChangeKind {
     CreatedDirectory,
     MovedFile,
     PatchedArchive,
+    DocumentsFile,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Installation {
