@@ -31,4 +31,4 @@ export interface AdminPanelData {
   downloads?:AdminDownload[];audit?:AdminAudit[];
 }
 export interface PatchBuilderData {id:number;status:string;version:string;file_tree:{path:string;size:number;directory:boolean}[];actions:PatchAction[]}
-export interface PatchAction {id:string;type:string;source?:string|null;destination:string;backup:boolean}
+export interface PatchAction {id:string;type:string;source?:string|null;destination:string;backup:boolean;expected_sha256?:string|null;options?:Record<string,unknown>}
