@@ -29,13 +29,18 @@ final class ManifestValidator
             $type = $action['type'] ?? '';
             if ($type === 'RUN_BAT') {
                 $hash = strtolower((string)($action['expected_sha256'] ?? ''));
+                $approved = [
+                    "83848a9cf76b60db8577e1978a0bab9c271a5a4a3a3a32a205614a7b69b0b9b8" => '0.1.2',
+                    "7016526b403eff2374a2874274a29bae97fff14daa10682d230f32716d2ff463" => '0.1.3',
+                ];
+                $minVersion = $approved[$hash] ?? null;
                 if (($manifest['game']['slug'] ?? '') !== 'battlefield-v'
                     || ($action['source'] ?? '') !== 'Install.bat'
                     || ($action['destination'] ?? '') !== 'Install.bat'
                     || ($action['backup'] ?? true) !== false
-                    || $hash !== "83848a9cf76b60db8577e1978a0bab9c271a5a4a3a3a32a205614a7b69b0b9b8"
-                    || version_compare((string)($manifest['patch']['minimum_loader_version'] ?? '0'), '0.1.2', '<')
-                ) $errors[] = "{$label}: RUN_BAT sadece dogrulanmis Battlefield V Install.bat icin ve Loader 0.1.2+ ile kullanilir.";
+                    || $minVersion === null
+                    || version_compare((string)($manifest['patch']['minimum_loader_version'] ?? '0'), (string)$minVersion, '<')
+                ) $errors[] = "{$label}: RUN_BAT icin dogrulanmis Install.bat ve hash ile uyumlu minimum Loader surumu gerekli.";
             }
             if ($type === 'APPEND_FAT_DAT') {
                 if (version_compare((string)($manifest['patch']['minimum_loader_version'] ?? '0'), '0.1.1', '<')) $errors[] = "{$label}: Minimum Loader sürümü 0.1.1 olmalıdır.";
