@@ -19,6 +19,13 @@ use std::{
     path::{Path, PathBuf},
 };
 use sysinfo::{Disks, System};
+
+// Only the audited Battlefield V batch from the supplied archive is accepted.
+const BFV_BAT_SHA256: &str = "83848a9cf76b60db8577e1978a0bab9c271a5a4a3a3a32a205614a7b69b0b9b8";
+const BFV_JSON_SHA256: &str = "f3c24860e661bedeb4d3b71e43c0cbf3b2f1fd40c3d13e64bf98420e45e41088";
+const BFV_JSON_NAME: &str = "en_US-74558638.json";
+const BFV_DOCUMENT_REL: &str = "Battlefield V/twinkle/assets/en_US-74558638.json";
+
 use tauri::{AppHandle, Emitter};
 use walkdir::WalkDir;
 
@@ -147,6 +154,20 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<()> {
                 return Err(LoaderError::Manifest("APPEND_FAT_DAT tek action olmalıdır".into()));
             }
         }
+        if action.kind == ActionType::RunBat {
+            if manifest.game.slug != "battlefield-v"
+                || action.source.as_deref() != Some("Install.bat")
+                || action.destination != "Install.bat"
+                || action.backup
+                || action.expected_sha256.as_deref().map(str::to_ascii_lowercase).as_deref()
+                    != Some(BFV_BAT_SHA256)
+                || !version_at_least(&manifest.patch.minimum_loader_version, "0.1.2")
+            {
+                return Err(LoaderError::Manifest(
+                    "Battlefield V RUN_BAT icin onayli Install.bat, SHA-256, backup=false ve minimum Loader 0.1.2 gereklidir".into(),
+                ));
+            }
+        }
         uuid::Uuid::parse_str(&action.id)
             .map_err(|_| LoaderError::Manifest(format!("Action UUID geçersiz: {}", action.id)))?;
         validate_relative(&action.destination)?;
@@ -157,6 +178,7 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<()> {
                 | ActionType::ReplaceFile
                 | ActionType::MoveFile
                 | ActionType::RenameFile
+                | ActionType::RunBat
         ) {
             validate_relative(action.source.as_deref().ok_or_else(|| {
                 LoaderError::Manifest(format!("Action source eksik: {}", action.id))
@@ -216,6 +238,18 @@ pub fn dry_run(manifest: &Manifest, game_root: &Path) -> Result<DryRun> {
     for action in &manifest.install_actions {
         let destination = resolve_inside(game_root, &action.destination)?;
         match action.kind {
+            ActionType::RunBat => {
+                let document = battlefield_v_document_target()?;
+                if document.is_file() {
+                    result.changed_files += 1;
+                    result.backup_files += 1;
+                } else {
+                    result.created_files += 1;
+                }
+                result.warnings.push(
+                    "Battlefield V: dogrulanmis Install.bat Belgeler altindaki JSON'u degistirecek; degisiklik yedeklenir.".into(),
+                );
+            }
             ActionType::AppendFatDat => {
                 result.changed_files += 2;
                 result.backup_files += 2;
@@ -366,6 +400,7 @@ pub fn install(
         Box::new(DeleteHandler),
         Box::new(DirectoryHandler),
         Box::new(MoveHandler),
+        Box::new(RunBatHandler),
     ];
     for (index, action) in manifest.install_actions.iter().enumerate() {
         if action.kind == ActionType::AppendFatDat {
@@ -407,7 +442,7 @@ pub fn install(
         if let Some(expected) = &action.expected_sha256 {
             if !matches!(
                 action.kind,
-                ActionType::DeleteFile | ActionType::DeleteDirectory | ActionType::CreateDirectory
+                ActionType::DeleteFile | ActionType::DeleteDirectory | ActionType::CreateDirectory | ActionType::RunBat
             ) {
                 let destination = resolve_inside(game_root, &action.destination)?;
                 if !destination.is_file()
@@ -607,6 +642,112 @@ fn resolve_archive_copy_source(
     Err(LoaderError::Manifest(format!(
         "Archive source eşleşmesi belirsiz: {source_rel}. Birden fazla .{expected_extension} dosyası bulundu: {names}"
     )))
+}
+
+// This action is deliberately *not* a generic script runner: only the reviewed
+// Battlefield V script and expected JSON are accepted. The script itself runs
+// on Windows, after the archive and its pinned script/source files are checked.
+fn battlefield_v_document_target() -> Result<PathBuf> {
+    let home = std::env::var_os("USERPROFILE")
+        .ok_or_else(|| LoaderError::Other("Windows USERPROFILE bulunamadi".into()))?;
+    let profile = PathBuf::from(home);
+    let docs = if profile.join("OneDrive").join("Documents").exists() {
+        profile.join("OneDrive").join("Documents")
+    } else {
+        profile.join("Documents")
+    };
+    Ok(docs.join(BFV_DOCUMENT_REL))
+}
+
+struct RunBatHandler;
+impl PatchActionHandler for RunBatHandler {
+    fn supports(&self, action: &Action) -> bool {
+        action.kind == ActionType::RunBat
+    }
+    fn apply(
+        &self,
+        action: &Action,
+        archive: &Path,
+        _game: &Path,
+        backup: &Path,
+        changes: &mut Vec<ChangeRecord>,
+    ) -> Result<()> {
+        execute_bfv_batch(action, archive, backup, changes)
+    }
+}
+
+#[cfg(not(windows))]
+fn execute_bfv_batch(
+    _action: &Action,
+    _archive: &Path,
+    _backup: &Path,
+    _changes: &mut Vec<ChangeRecord>,
+) -> Result<()> {
+    Err(LoaderError::Other("RUN_BAT yalnizca Windows'ta desteklenir".into()))
+}
+
+#[cfg(windows)]
+fn execute_bfv_batch(
+    action: &Action,
+    archive: &Path,
+    backup: &Path,
+    changes: &mut Vec<ChangeRecord>,
+) -> Result<()> {
+    use std::process::Command;
+    let script = resolve_inside(archive, "Install.bat")?;
+    let source = resolve_inside(archive, BFV_JSON_NAME)?;
+    if !script.is_file() || !source.is_file()
+        || !hash_file(&script)?.eq_ignore_ascii_case(BFV_BAT_SHA256)
+        || !hash_file(&source)?.eq_ignore_ascii_case(BFV_JSON_SHA256)
+        || action.expected_sha256.as_deref().map(str::to_ascii_lowercase).as_deref()
+            != Some(BFV_BAT_SHA256)
+    {
+        return Err(LoaderError::Integrity("Battlefield V batch/JSON SHA-256 dogrulamasi basarisiz".into()));
+    }
+    let target = battlefield_v_document_target()?;
+    if target.exists() && !target.is_file() {
+        return Err(LoaderError::Conflict("Belgeler JSON hedefi bir dosya degil".into()));
+    }
+    if let Some(parent) = target.parent() { fs::create_dir_all(parent)?; }
+    let (saved, original_sha) = if target.is_file() {
+        let (name, sha) = make_backup(&target, backup)?;
+        (Some(name), Some(sha))
+    } else {
+        (None, None)
+    };
+    // Do not search PATH for a potentially attacker-controlled cmd.exe.
+    let system_root = std::env::var_os("SystemRoot")
+        .ok_or_else(|| LoaderError::Other("SystemRoot bulunamadi".into()))?;
+    let cmd = PathBuf::from(system_root).join("System32").join("cmd.exe");
+    let result = Command::new(cmd)
+        .arg("/D")
+        .arg("/C")
+        .arg(format!("call \"{}\"", script.display()))
+        .current_dir(archive)
+        .status();
+    // Even an I/O error while hashing must pass through the restore path.
+    let ok = matches!(&result, Ok(status) if status.success())
+        && target.is_file()
+        && hash_file(&target).map(|sha| sha.eq_ignore_ascii_case(BFV_JSON_SHA256)).unwrap_or(false);
+    if !ok {
+        if let Some(saved) = &saved {
+            copy_file(&backup.join(saved), &target)?;
+        } else if target.is_file() {
+            fs::remove_file(&target)?;
+        }
+        return Err(LoaderError::Other(format!(
+            "Install.bat basarisiz veya hedef JSON dogrulanamadi: {result:?}"
+        )));
+    }
+    changes.push(ChangeRecord {
+        kind: ChangeKind::DocumentsFile,
+        path: BFV_DOCUMENT_REL.into(),
+        secondary_path: None,
+        backup_path: saved,
+        original_sha256: original_sha,
+        installed_sha256: Some(BFV_JSON_SHA256.into()),
+    });
+    Ok(())
 }
 
 struct CopyHandler;
@@ -839,8 +980,19 @@ fn make_backup(path: &Path, backup: &Path) -> Result<(String, String)> {
 }
 fn rollback_changes(game: &Path, backup: &Path, changes: &[ChangeRecord]) -> Result<()> {
     for change in changes.iter().rev() {
-        let path = resolve_inside(game, &change.path)?;
+        let path = if change.kind == ChangeKind::DocumentsFile {
+            battlefield_v_document_target()?
+        } else {
+            resolve_inside(game, &change.path)?
+        };
         match change.kind {
+            ChangeKind::DocumentsFile => {
+                if let Some(saved) = &change.backup_path {
+                    copy_file(&backup.join(saved), &path)?;
+                } else if path.is_file() {
+                    fs::remove_file(&path)?;
+                }
+            },
             ChangeKind::PatchedArchive => crate::patch::fat_dat::restore(game, backup, change)?,
             ChangeKind::CreatedFile => {
                 if path.is_file() {
@@ -888,7 +1040,11 @@ fn verify_records(game: &Path, changes: &[ChangeRecord]) -> Result<Verification>
     for change in changes {
         if let Some(expected) = &change.installed_sha256 {
             checked += 1;
-            let path = resolve_inside(game, &change.path)?;
+            let path = if change.kind == ChangeKind::DocumentsFile {
+                battlefield_v_document_target()?
+            } else {
+                resolve_inside(game, &change.path)?
+            };
             if !path.is_file() || !hash_file(&path)?.eq_ignore_ascii_case(expected) {
                 conflicts.push(change.path.clone());
             }
@@ -1147,6 +1303,31 @@ mod tests {
             },
         }
     }
+    #[test]
+    fn run_bat_manifest_requires_exact_battlefield_v_script_and_loader_version() {
+        let mut m = manifest();
+        m.game.slug = "battlefield-v".into();
+        m.patch.minimum_loader_version = "0.1.2".into();
+        m.install_actions.push(Action {
+            id: uuid::Uuid::new_v4().to_string(),
+            kind: ActionType::RunBat,
+            source: Some("Install.bat".into()),
+            destination: "Install.bat".into(),
+            backup: false,
+            expected_sha256: Some(BFV_BAT_SHA256.into()),
+            options: Default::default(),
+        });
+        assert!(validate_manifest(&m).is_ok());
+        m.install_actions[1].expected_sha256 = Some("0".repeat(64));
+        assert!(validate_manifest(&m).is_err());
+        m.install_actions[1].expected_sha256 = Some(BFV_BAT_SHA256.into());
+        m.patch.minimum_loader_version = "0.1.1".into();
+        assert!(validate_manifest(&m).is_err());
+        m.patch.minimum_loader_version = "0.1.2".into();
+        m.game.slug = "another-game".into();
+        assert!(validate_manifest(&m).is_err());
+    }
+
     #[test]
     fn version_gate_blocks_old_loader() {
         let mut m = manifest();
