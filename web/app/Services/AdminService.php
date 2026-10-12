@@ -172,15 +172,113 @@ final class AdminService
 
     public function saveActions(int $versionId,array $actions,int $actor): void
     {
-        $manifestActions=[];foreach($actions as $i=>$a){$type=$a['type']??'';$id=$a['id']??$this->uuid();$manifestActions[]=['id'=>$id,'type'=>$type,'source'=>$a['source']??null,'destination'=>$a['destination']??'','backup'=>(bool)($a['backup']??true),'options'=>$a['options']??[],'expected_sha256'=>$a['expected_sha256']??null];}
-        $pdo=Database::connection();
-        $version=$pdo->prepare('SELECT g.slug,pv.minimum_loader_version FROM patch_versions pv JOIN patches p ON p.id=pv.patch_id JOIN games g ON g.id=p.game_id WHERE pv.id=?');
-        $version->execute([$versionId]);
-        $versionData=$version->fetch();
-        if (!$versionData) throw new \DomainException('Patch surumu bulunamadi.');
-        $errors=(new ManifestValidator())->validate(['schema_version'=>1,'game'=>['id'=>1,'slug'=>$versionData['slug']],'detection'=>['executable'=>'Validation.exe','process_name'=>'Validation.exe','required_files'=>[]],'patch'=>['version'=>'0.0.0','minimum_loader_version'=>$versionData['minimum_loader_version']],'archive'=>['sha256'=>str_repeat('0',64),'size'=>1],'install_actions'=>$manifestActions,'integrity'=>[],'backup'=>[]]);
-        if($errors)throw new \DomainException(implode(' ',$errors));
-        $pdo=Database::connection();$pdo->beginTransaction();try{$pdo->prepare('DELETE FROM patch_install_actions WHERE patch_version_id=?')->execute([$versionId]);$stmt=$pdo->prepare('INSERT INTO patch_install_actions(patch_version_id,action_uuid,action_type,source_path,destination_path,backup_enabled,expected_sha256,sort_order,options_json) VALUES(?,?,?,?,?,?,?,?,?)');foreach($manifestActions as $i=>$a)$stmt->execute([$versionId,$a['id'],$a['type'],$a['source']?:null,$a['destination'],$a['backup']?1:0,$actions[$i]['expected_sha256']??null,($i+1)*10,json_encode($actions[$i]['options']??new \stdClass())]);$pdo->commit();(new AuditService())->write($actor,'actions.updated','patch_version',$versionId,null,$manifestActions);}catch(\Throwable$e){$pdo->rollBack();throw$e;}
+        $pdo = Database::connection();
+
+        // Gercek oyun ve surum bilgilerini kullan.
+        // Sabit "validation" slug'i RUN_BAT kontrolunu yaniltir.
+        $stmt = $pdo->prepare(
+            'SELECT g.slug, g.process_name, pv.minimum_loader_version
+             FROM patch_versions pv
+             JOIN patches p ON p.id = pv.patch_id
+             JOIN games g ON g.id = p.game_id
+             WHERE pv.id = ?'
+        );
+        $stmt->execute([$versionId]);
+        $version = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$version) {
+            throw new DomainException('Patch surumu bulunamadi.');
+        }
+
+        $actions = array_values($actions);
+        $manifestActions = [];
+        foreach ($actions as $a) {
+            if (!is_array($a)) {
+                throw new DomainException('Kurulum islemi gecersiz.');
+            }
+            $manifestActions[] = [
+                'id' => $a['id'] ?? $this->uuid(),
+                'type' => $a['type'] ?? '',
+                'source' => $a['source'] ?? null,
+                'destination' => $a['destination'] ?? '',
+                'backup' => (bool)($a['backup'] ?? true),
+                'expected_sha256' => $a['expected_sha256'] ?? null,
+                'options' => $a['options'] ?? [],
+            ];
+        }
+
+        // Mevcut APPEND_FAT_DAT ve diger action kontrolleri de devam eder.
+        $errors = (new ManifestValidator())->validate([
+            'schema_version' => 1,
+            'game' => [
+                'id' => 1,
+                'slug' => $version['slug'],
+            ],
+            'detection' => [
+                'executable' => 'Validation.exe',
+                'process_name' => $version['process_name'],
+                'required_files' => [],
+            ],
+            'patch' => [
+                'version' => '0.0.0',
+                'minimum_loader_version' => $version['minimum_loader_version'],
+            ],
+            'archive' => [
+                'sha256' => str_repeat('0', 64),
+                'size' => 1,
+            ],
+            'install_actions' => $manifestActions,
+            'integrity' => [],
+            'backup' => [],
+        ]);
+        if ($errors) {
+            throw new DomainException(implode(' ', $errors));
+        }
+
+        $pdo->beginTransaction();
+        try {
+            $pdo->prepare('DELETE FROM patch_install_actions WHERE patch_version_id=?')
+                ->execute([$versionId]);
+
+            $insert = $pdo->prepare(
+                'INSERT INTO patch_install_actions
+                 (patch_version_id,action_uuid,action_type,source_path,
+                  destination_path,backup_enabled,expected_sha256,
+                  sort_order,options_json)
+                 VALUES(?,?,?,?,?,?,?,?,?)'
+            );
+
+            foreach ($manifestActions as $i => $a) {
+                $optionsJson = json_encode(
+                    $actions[$i]['options'] ?? new \stdClass(),
+                    JSON_THROW_ON_ERROR
+                );
+                $insert->execute([
+                    $versionId,
+                    $a['id'],
+                    $a['type'],
+                    $a['source'] ?: null,
+                    $a['destination'],
+                    $a['backup'] ? 1 : 0,
+                    $a['expected_sha256'],
+                    ($i + 1) * 10,
+                    $optionsJson,
+                ]);
+            }
+            $pdo->commit();
+            (new AuditService())->write(
+                $actor,
+                'actions.updated',
+                'patch_version',
+                $versionId,
+                null,
+                $manifestActions
+            );
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
     }
 
     public function publish(int $versionId,int $actor): void
@@ -373,6 +471,64 @@ final class AdminService
         $pdo=Database::connection();$s=$pdo->prepare('SELECT id,email,role,release_channel,status FROM users WHERE id=?');$s->execute([$id]);$before=$s->fetch();if(!$before)throw new DomainException('Kullanıcı bulunamadı.');$pdo->prepare('UPDATE users SET role=?,release_channel=?,status=? WHERE id=?')->execute([$role,$channel,$status,$id]);(new AuditService())->write($actor,'user.updated','user',$id,$before,$input);
     }
 
+    public function resetUserDevice(int $userId,int $actor): array
+    {
+        if($userId<=0)throw new DomainException('Kullanıcı kimliği geçersiz.');
+
+        $pdo=Database::connection();
+        $pdo->beginTransaction();
+
+        try{
+            $s=$pdo->prepare('SELECT id,email FROM users WHERE id=? FOR UPDATE');
+            $s->execute([$userId]);
+            $user=$s->fetch();
+            if(!$user)throw new DomainException('Kullanıcı bulunamadı.');
+
+            $s=$pdo->prepare('SELECT COUNT(*) FROM user_devices WHERE user_id=?');
+            $s->execute([$userId]);
+            $deviceCount=(int)$s->fetchColumn();
+
+            // Eski bilgisayardaki tüm API oturumlarını geçersiz kıl.
+            $s=$pdo->prepare('DELETE FROM api_tokens WHERE user_id=?');
+            $s->execute([$userId]);
+            $tokenCount=$s->rowCount();
+
+            // Cihaz eşleştirmesini tamamen temizle.
+            // Kullanıcı bir sonraki loader girişinde kullandığı PC'yi yeniden bağlar.
+            $s=$pdo->prepare('DELETE FROM user_devices WHERE user_id=?');
+            $s->execute([$userId]);
+            $removedDevices=$s->rowCount();
+
+            $pdo->commit();
+
+            (new AuditService())->write(
+                $actor,
+                'user.device_reset',
+                'user',
+                $userId,
+                [
+                    'email'=>$user['email'],
+                    'device_count'=>$deviceCount,
+                ],
+                [
+                    'devices_removed'=>$removedDevices,
+                    'tokens_removed'=>$tokenCount,
+                ]
+            );
+
+            return [
+                'user_id'=>$userId,
+                'email'=>$user['email'],
+                'devices_removed'=>$removedDevices,
+                'tokens_removed'=>$tokenCount,
+            ];
+        }catch(Throwable $e){
+            if($pdo->inTransaction())$pdo->rollBack();
+            throw $e;
+        }
+    }
+
+
     public function createLoaderVersion(array $input,array $file,int $actor): int
     {
         $version=trim((string)($input['version']??''));if(!preg_match('/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/',$version))throw new DomainException('Loader version SemVer olmalıdır.');
@@ -394,5 +550,3 @@ final class AdminService
     private function slugExists(string $slug):bool{$s=Database::connection()->prepare('SELECT 1 FROM games WHERE slug=?');$s->execute([$slug]);return(bool)$s->fetchColumn();}
     private function uuid():string{$d=random_bytes(16);$d[6]=chr((ord($d[6])&0x0f)|0x40);$d[8]=chr((ord($d[8])&0x3f)|0x80);return vsprintf('%s%s-%s-%s-%s-%s%s%s',str_split(bin2hex($d),4));}
 }
-
-
