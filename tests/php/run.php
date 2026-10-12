@@ -66,6 +66,16 @@ foreach ([
     $copy=$m;$change($copy);
     expect((new ManifestValidator())->validate($copy)!==[],"RUN_BAT rejects {$name}");
 }
+// Windows Known Folder fix: new audited BAT requires 0.1.3; old stable is compatible.
+$legacyBfv = $m;
+$legacyBfv['patch']['minimum_loader_version'] = '0.1.2';
+expect((new ManifestValidator())->validate($legacyBfv)===[], 'legacy published BFV remains valid');
+$newBfv = $m;
+$newBfv['patch']['minimum_loader_version'] = '0.1.3';
+$newBfv['install_actions'][1]['expected_sha256'] = '7016526b403eff2374a2874274a29bae97fff14daa10682d230f32716d2ff463';
+expect((new ManifestValidator())->validate($newBfv)===[], 'known-folder BFV BAT accepted');
+$newBfv['patch']['minimum_loader_version'] = '0.1.2';
+expect((new ManifestValidator())->validate($newBfv)!==[], 'new BAT rejects Loader 0.1.2');
 echo "PASS: {$tests} PHP security/manifest assertions.\n";
 
 
