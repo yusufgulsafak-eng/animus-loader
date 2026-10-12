@@ -41,6 +41,31 @@ $m=$manifest; $m['patch']['minimum_loader_version']='0.1.0';
 expect((new ManifestValidator())->validate($m)!==[],'old loader gate rejected');
 $m=$manifest; $m['install_actions'][0]['options']['execute']='FC5_Kur.exe';
 expect((new ManifestValidator())->validate($m)!==[],'unknown executable option rejected');
+// Only the pinned BFV batch is accepted. Hash/version/game alterations are rejected.
+$m=json_decode(file_get_contents(__DIR__.'/../../examples/manifest-v1.json'),true,512,JSON_THROW_ON_ERROR);
+$m['game']['slug']='battlefield-v';
+$m['patch']['minimum_loader_version']='0.1.2';
+$run=[
+    'id'=>'3a2eb865-32bb-43db-9373-846be427c2dc',
+    'type'=>'RUN_BAT',
+    'source'=>'Install.bat',
+    'destination'=>'Install.bat',
+    'backup'=>false,
+    'expected_sha256'=>'83848a9cf76b60db8577e1978a0bab9c271a5a4a3a3a32a205614a7b69b0b9b8',
+];
+$m['install_actions'][]=$run;
+expect((new ManifestValidator())->validate($m)===[],'pinned BFV RUN_BAT accepted');
+foreach ([
+  'slug' => function(&$x){$x['game']['slug']='another-game';},
+  'old loader' => function(&$x){$x['patch']['minimum_loader_version']='0.1.1';},
+  'tampered hash' => function(&$x){$x['install_actions'][1]['expected_sha256']=str_repeat('0',64);},
+  'unsafe source' => function(&$x){$x['install_actions'][1]['source']='../Install.bat';},
+  'renamed destination' => function(&$x){$x['install_actions'][1]['destination']='other.bat';},
+  'backup enabled' => function(&$x){$x['install_actions'][1]['backup']=true;},
+] as $name=>$change) {
+    $copy=$m;$change($copy);
+    expect((new ManifestValidator())->validate($copy)!==[],"RUN_BAT rejects {$name}");
+}
 echo "PASS: {$tests} PHP security/manifest assertions.\n";
 
 
