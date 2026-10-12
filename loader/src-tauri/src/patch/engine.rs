@@ -23,10 +23,12 @@ use sysinfo::{Disks, System};
 // Only the audited Battlefield V batch from the supplied archive is accepted.
 const BFV_BAT_SHA256_LEGACY: &str = "83848a9cf76b60db8577e1978a0bab9c271a5a4a3a3a32a205614a7b69b0b9b8";
 const BFV_BAT_SHA256: &str = "7016526b403eff2374a2874274a29bae97fff14daa10682d230f32716d2ff463";
+const BFV_BAT_SHA256_014: &str = "1702cc10a25359f235c791f21a7aa5365878dc53200e144a15ab6d5159b76834";
 // Old archive remains supported for the active 1.0.0 release. Its BAT uses a
 // hardcoded English Documents path, so native copy is used for the old hash.
 fn bfv_min_loader_for_bat(hash: &str) -> Option<&'static str> {
-    if hash.eq_ignore_ascii_case(BFV_BAT_SHA256) { Some("0.1.3") }
+    if hash.eq_ignore_ascii_case(BFV_BAT_SHA256_014) { Some("0.1.3") }
+    else if hash.eq_ignore_ascii_case(BFV_BAT_SHA256) { Some("0.1.3") }
     else if hash.eq_ignore_ascii_case(BFV_BAT_SHA256_LEGACY) { Some("0.1.2") }
     else { None }
 }
@@ -257,6 +259,15 @@ pub fn dry_run(manifest: &Manifest, game_root: &Path) -> Result<DryRun> {
                 result.warnings.push(
                     "Battlefield V: dogrulanmis Install.bat Belgeler altindaki JSON'u degistirecek; degisiklik yedeklenir.".into(),
                 );
+                if action.expected_sha256.as_deref().map(|h| h.eq_ignore_ascii_case(BFV_BAT_SHA256_014)).unwrap_or(false) {
+                    result.warnings.push("Bu BAT oyun klasorundeki iki EA AntiCheat launcher dosyasini silebilir; orijinaller yedeklenir ve kaldirmada geri yuklenir.".into());
+                    for relative in ["EAAntiCheat.GameServiceLauncher.exe", "EAAntiCheat.GameServiceLauncher.exe_b"] {
+                        if resolve_inside(game_root, relative)?.is_file() {
+                            result.deleted_files += 1;
+                            result.backup_files += 1;
+                        }
+                    }
+                }
             }
             ActionType::AppendFatDat => {
                 result.changed_files += 2;
@@ -680,11 +691,11 @@ impl PatchActionHandler for RunBatHandler {
         &self,
         action: &Action,
         archive: &Path,
-        _game: &Path,
+        game: &Path,
         backup: &Path,
         changes: &mut Vec<ChangeRecord>,
     ) -> Result<()> {
-        execute_bfv_batch(action, archive, backup, changes)
+        execute_bfv_batch(action, archive, game, backup, changes)
     }
 }
 
@@ -692,6 +703,7 @@ impl PatchActionHandler for RunBatHandler {
 fn execute_bfv_batch(
     _action: &Action,
     _archive: &Path,
+    _game: &Path,
     _backup: &Path,
     _changes: &mut Vec<ChangeRecord>,
 ) -> Result<()> {
@@ -702,6 +714,7 @@ fn execute_bfv_batch(
 fn execute_bfv_batch(
     action: &Action,
     archive: &Path,
+    game: &Path,
     backup: &Path,
     changes: &mut Vec<ChangeRecord>,
 ) -> Result<()> {
@@ -728,9 +741,23 @@ fn execute_bfv_batch(
     } else {
         (None, None)
     };
-    // 0.1.0/1.0.0 archive: vetted BAT contains a localized-folder bug.
-    // Apply its pinned JSON with native file I/O instead of running the buggy BAT.
-    // New 1.0.1 archive: actually run pinned Install.bat with the real Documents path.
+    // Legacy script: copy verified JSON natively; newer pinned scripts execute as batch.
+    // Pinned DEL BAT also deletes two anti-cheat launchers from the game root.
+    // Back these up in the existing rollback journal *before* running the BAT.
+    let del_style = script_hash.eq_ignore_ascii_case(BFV_BAT_SHA256_014);
+    let mut pending_deleted: Vec<&str> = Vec::new();
+    if del_style {
+        for relative in ["EAAntiCheat.GameServiceLauncher.exe", "EAAntiCheat.GameServiceLauncher.exe_b"] {
+            let file = resolve_inside(game, relative)?;
+            if file.exists() {
+                if !file.is_file() {
+                    return Err(LoaderError::Conflict(format!("EA AntiCheat dosya yolu dosya degil: {relative}")));
+                }
+                backup_deleted(&file, relative, backup, changes)?;
+                pending_deleted.push(relative);
+            }
+        }
+    }
     let execution = if script_hash.eq_ignore_ascii_case(BFV_BAT_SHA256_LEGACY) {
         copy_file(&source, &target).map_err(|error| error.to_string())
     } else {
@@ -744,7 +771,9 @@ fn execute_bfv_batch(
                 .arg("/C")
                 .arg(format!("call \"{}\"", script.display()))
                 .env("ANIMUS_DOCUMENTS_DIR", battlefield_v_documents_dir()?)
-                .current_dir(archive)
+                // Only the pinned DEL script runs in the game root, so its
+                // relative DEL commands reach the intended files.
+                .current_dir(if del_style { game } else { archive })
                 .output()?;
             if !output.status.success() {
                 return Err(LoaderError::Other(format!(
@@ -753,6 +782,11 @@ fn execute_bfv_batch(
                     String::from_utf8_lossy(&output.stdout).trim(),
                     String::from_utf8_lossy(&output.stderr).trim()
                 )));
+            }
+            for relative in &pending_deleted {
+                if resolve_inside(game, relative)?.exists() {
+                    return Err(LoaderError::Other(format!("EA AntiCheat dosyasi silinemedi: {relative}")));
+                }
             }
             Ok(())
         })();
@@ -1365,6 +1399,10 @@ mod tests {
         m.patch.minimum_loader_version = "0.1.1".into();
         assert!(validate_manifest(&m).is_err());
         m.patch.minimum_loader_version = "0.1.3".into();
+        m.install_actions[1].expected_sha256 = Some(BFV_BAT_SHA256_014.into());
+        assert!(validate_manifest(&m).is_ok());
+        m.patch.minimum_loader_version = "0.1.2".into();
+        assert!(validate_manifest(&m).is_err());
         m.game.slug = "another-game".into();
         assert!(validate_manifest(&m).is_err());
     }
