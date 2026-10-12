@@ -766,10 +766,31 @@ fn execute_bfv_batch(
             let system_root = std::env::var_os("SystemRoot")
                 .ok_or_else(|| LoaderError::Other("SystemRoot bulunamadi".into()))?;
             let cmd = PathBuf::from(system_root).join("System32").join("cmd.exe");
-            let output = Command::new(cmd)
-                .arg("/D")
-                .arg("/C")
-                .arg(format!("call \"{}\"", script.display()))
+            // resolve_inside() canonicalizes the path. On Windows this can
+            // produce a verbatim prefix (\\?\C:\...) that cmd.exe cannot
+            // reliably invoke as a .bat file. The file was already resolved
+            // and hash-verified above, so strip the prefix only for cmd.exe.
+            let canonical_text = script.to_string_lossy();
+            let cmd_script = canonical_text
+                .strip_prefix(r"\\?\")
+                .unwrap_or(canonical_text.as_ref());
+            if !Path::new(cmd_script).is_absolute()
+                || cmd_script.starts_with("UNC\\")
+                || cmd_script.chars().any(|ch| matches!(ch, '%' | '!' | '"' | '\r' | '\n'))
+            {
+                return Err(LoaderError::Other(
+                    "Install.bat Windows cmd.exe icin uygun olmayan bir yolda".into(),
+                ));
+            }
+            // cmd.exe /S /C expects double outer quotes around a quoted
+            // batch pathname. Command::arg would escape the inner quotes for
+            // the C runtime, causing cmd.exe to treat them as literal text.
+            // Windows-only raw_arg deliberately passes the cmd syntax intact.
+            use std::os::windows::process::CommandExt;
+            let mut command = Command::new(cmd);
+            command.arg("/D").arg("/S").arg("/V:OFF").arg("/C");
+            command.raw_arg(format!("\"\"{}\"\"", cmd_script));
+            let output = command
                 .env("ANIMUS_DOCUMENTS_DIR", battlefield_v_documents_dir()?)
                 // Only the pinned DEL script runs in the game root, so its
                 // relative DEL commands reach the intended files.
