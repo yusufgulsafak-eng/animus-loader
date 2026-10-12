@@ -108,7 +108,7 @@
 
   const types = ['COPY_FILE','COPY_DIRECTORY','REPLACE_FILE','DELETE_FILE','DELETE_DIRECTORY','CREATE_DIRECTORY','MOVE_FILE','RENAME_FILE','APPEND_FAT_DAT','RUN_BAT'];
   // Yalnizca bu hash ile dogrulanan Battlefield V Install.bat desteklenir.
-  const BFV_INSTALL_BAT_SHA256 = '83848a9cf76b60db8577e1978a0bab9c271a5a4a3a3a32a205614a7b69b0b9b8';
+  const BFV_INSTALL_BAT_SHA256 = '7016526b403eff2374a2874274a29bae97fff14daa10682d230f32716d2ff463';
   const escapeAttribute = value => String(value || '').replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;');
   const addAction = (value = {}) => {
     const row = document.createElement('div');
