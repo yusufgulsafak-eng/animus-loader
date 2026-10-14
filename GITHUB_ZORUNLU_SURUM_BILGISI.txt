@@ -1,0 +1,5 @@
+GitHub'a GITHUB_GUNCELLEME altındaki dosyaları güncelle.
+0.1.4 kaynak sürüm bilgisi ayarlandı. Windows EXE bu ortamda derlenmedi.
+Üretilmiş yeni EXE ve API bağlantısı test edilmeden cPanel eski Loader engelini açma.
+X-Animus-Loader-Version sürüm header'ı yeni Tauri uygulamasınca gönderiliyor.
+E-posta / Discord akışı mevcut Loader kaynak projesinden korunur.
