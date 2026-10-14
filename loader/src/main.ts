@@ -215,7 +215,8 @@ function openProfileSettings(){
   });
 }
 
-function fallbackConfig():LoaderConfig{return cache.readConfig()||{app_name:"Animus Türkçe Yama",accent_color:"#b7f34a",library_title:"Oyun Kütüphanesi",announcements:[]}}
+const REQUIRED_DISCORD_INVITE="https://discord.gg/RMP6gGHpKK";
+function fallbackConfig():LoaderConfig{return cache.readConfig()||{app_name:"Animus Türkçe Yama",accent_color:"#b7f34a",library_title:"Oyun Kütüphanesi",discord_url:REQUIRED_DISCORD_INVITE,announcements:[]}}
 
 function loginView(error="",retry=false){
   const config=state.config||fallbackConfig();document.documentElement.style.setProperty("--accent",config.accent_color||"#b7f34a");
@@ -227,7 +228,54 @@ function loginView(error="",retry=false){
   document.querySelector("#retry-login")?.addEventListener("click",()=>start());
   document.querySelector("#create-account")?.addEventListener("click",()=>registerView());
   document.querySelector("#forgot-password")?.addEventListener("click",()=>void openLink(WEB_BASE_URL+"/forgot-password","Şifre sıfırlama adresi tanımlı değil."));
-  document.querySelector<HTMLFormElement>("#login-form")!.onsubmit=async event=>{event.preventDefault();const form=new FormData(event.currentTarget as HTMLFormElement);const submit=document.querySelector<HTMLButtonElement>(".login-submit")!;submit.disabled=true;submit.textContent="Bağlanıyor…";try{state.user=await api.login(String(form.get("email")),String(form.get("password")),form.has("remember"));await boot()}catch(e){loginView(e instanceof Error?e.message:"Giriş başarısız",true)}};
+  document.querySelector<HTMLFormElement>("#login-form")!.onsubmit=async event=>{event.preventDefault();const form=new FormData(event.currentTarget as HTMLFormElement);const submit=document.querySelector<HTMLButtonElement>(".login-submit")!;submit.disabled=true;submit.textContent="Bağlanıyor…";try{state.user=await api.login(String(form.get("email")),String(form.get("password")),form.has("remember"));await enterAfterAuthentication()}catch(e){loginView(e instanceof Error?e.message:"Giriş başarısız",true)}};
+}
+
+/** İki doğrulama tamamlanmadan kütüphane/indirme ekranı açılmaz. */
+function accessView(message=""){
+  const config=state.config||fallbackConfig();
+  const user=state.user;
+  if(!user){loginView();return}
+  const emailOk=user.email_verified===true;
+  const discordOk=user.discord_linked===true;
+  app.innerHTML=`<main class="login"><section class="login-visual">${logoMarkup(config,"loader-logo")}<span class="overline">HESAP GÜVENLİĞİ</span><h1>İki adımda güvenli erişim.</h1><p>Yama indirmek için e-posta adresini doğrula ve Discord sunucumuzdaki üyeliğini bağla. Her indirmede üyelik sunucuda yeniden kontrol edilir.</p></section><section class="login-form access-form"><h2>Hesabını doğrula</h2><p>${escapeHtml(user.email)}</p>${message?`<div class="error"><span>${escapeHtml(message)}</span></div>`:""}<div class="access-step"><b>${emailOk?"✓":"1"} · E-posta doğrulama</b><p>${emailOk?"E-posta adresin doğrulandı.":"E-postana gönderilen doğrulama bağlantısına tıkla."}</p>${!emailOk?'<button class="login-submit" type="button" id="resend-email">Doğrulama e-postasını tekrar gönder</button>':""}</div><div class="access-step"><b>${discordOk?"✓":"2"} · Discord üyeliği</b><p>${discordOk?"Discord hesabın bağlı. Üyelik indirme sırasında tekrar kontrol edilir.":"Discord hesabını bağlayıp sunucumuzda üye olduğunu doğrula."}</p><button class="login-submit" type="button" id="link-discord">${discordOk?"Discord hesabını yeniden bağla":"Discord ile Bağlan"} →</button><button type="button" id="join-discord" class="access-secondary">Discord Sunucusuna Katıl</button><details class="discord-tr-help"><summary>Türkiye’den Discord açılmıyor mu?</summary><div class="discord-tr-help-body"><p>Discord’a erişim bazı Türkiye bağlantılarında engelleniyor. Bu uygulama Discord şifreni istemez; yalnızca resmî Discord sayfasında onay verirsin.</p><ol><li>Discord’a erişebildiğin güvenilir bir bağlantı veya kişisel VPN üzerinden tarayıcını aç.</li><li><b>Discord Sunucusuna Katıl</b> düğmesiyle sunucumuza gir ve sunucu kurallarını tamamla.</li><li>Loader’a dönüp <b>Discord ile Bağlan</b> seçeneğiyle aynı Discord hesabını yetkilendir.</li><li>İşlemden sonra <b>Durumu Kontrol Et</b> düğmesine bas.</li></ol><p>Yalnızca DNS değiştirmek her erişim engelini çözmez. Discord erişimi olmadan üyelik doğrulaması gerçekleştirilemez. Hesap veya şifreni üçüncü taraf doğrulama sitelerine verme.</p><label for="discord-invite-url">Sunucu davet adresi</label><input id="discord-invite-url" class="discord-invite-url" type="text" readonly value="${escapeHtml(REQUIRED_DISCORD_INVITE)}" aria-label="Discord davet bağlantısı (seçip kopyalayabilirsiniz)"><button type="button" class="access-secondary" id="copy-discord-invite">Davet Adresini Kopyala</button></div></details></div><button class="login-submit" type="button" id="refresh-access">Durumu Kontrol Et →</button><button class="access-secondary" id="access-logout" type="button">Başka hesapla giriş yap</button></section></main>`;
+  mountBackgroundMedia(document.querySelector<HTMLElement>(".login-visual")!,config.branding?.login_background,asset,60);
+  document.querySelector("#resend-email")?.addEventListener("click",async()=>{
+    const button=document.querySelector<HTMLButtonElement>("#resend-email")!;button.disabled=true;
+    try{const result=await api.resendVerificationEmail();notify(result.message)}
+    catch(error){notify(error instanceof Error?error.message:"E-posta gönderilemedi.",true)}
+    finally{button.disabled=false}
+  });
+  document.querySelector("#link-discord")?.addEventListener("click",async()=>{
+    const button=document.querySelector<HTMLButtonElement>("#link-discord")!;button.disabled=true;
+    try{const {url}=await api.discordLink();if(new URL(url).hostname!=="discord.com")throw new Error("Discord bağlantısı geçersiz.");await openLink(url)}
+    catch(error){notify(error instanceof Error?error.message:"Discord bağlantısı açılamadı.",true)}
+    finally{button.disabled=false}
+  });
+  document.querySelector("#join-discord")?.addEventListener("click",()=>void openLink(REQUIRED_DISCORD_INVITE));
+  document.querySelector<HTMLInputElement>("#discord-invite-url")?.addEventListener("click",event=>(event.currentTarget as HTMLInputElement).select());
+  document.querySelector("#copy-discord-invite")?.addEventListener("click",async()=>{
+    const invite=document.querySelector<HTMLInputElement>("#discord-invite-url");
+    try{
+      if(!navigator.clipboard?.writeText)throw new Error("Clipboard API kullanılamıyor");
+      await navigator.clipboard.writeText(REQUIRED_DISCORD_INVITE);
+      notify("Discord davet bağlantısı kopyalandı.");
+    }catch{
+      invite?.focus();invite?.select();
+      notify("Davet adresini seçtik. Ctrl+C ile kopyalayabilirsin.");
+    }
+  });
+  document.querySelector("#refresh-access")?.addEventListener("click",async()=>{
+    try{state.user=await api.me();if(state.user.email_verified&&state.user.discord_linked)await boot();else accessView("Doğrulama henüz tamamlanmadı. E-postanı ve Discord sunucu üyeliğini kontrol et.")}
+    catch(error){accessView(error instanceof Error?error.message:"Hesap durumu kontrol edilemedi.")}
+  });
+  document.querySelector("#access-logout")?.addEventListener("click",async()=>{try{await api.logout()}catch{}state.user=null;loginView()});
+}
+
+async function enterAfterAuthentication(){
+  if(!state.user){loginView();return}
+  if(!state.user.email_verified||!state.user.discord_linked){accessView();return}
+  await boot();
 }
 
 function registerView(error="",retry=false){
@@ -235,7 +283,7 @@ function registerView(error="",retry=false){
   app.innerHTML=`<main class="login"><section class="login-visual">${logoMarkup(config,"loader-logo")}<span class="overline">GÜVENLİ TÜRKÇE YAMA PLATFORMU</span><h1>Animus'a katıl.</h1><p>Tek loader üzerinden hesabını oluştur, oyun kütüphanene ve sana açık Türkçe yamalara eriş.</p></section><form id="register-form" class="login-form register-form"><div class="mobile-logo">${escapeHtml(config.app_name)}</div><h2>Hesap oluştur</h2><p>Kayıt işlemi güvenli Animus API üzerinden tamamlanır.</p>${error?`<div class="error"><b>Kayıt tamamlanamadı</b><span>${escapeHtml(error)}</span>${retry?'<button type="button" id="retry-register">Tekrar Dene</button>':""}</div>`:""}<label>Görünen ad<input name="display_name" minlength="2" maxlength="100" required autocomplete="name"></label><label>E-posta<input name="email" type="email" required autocomplete="email"></label><label>Şifre<input name="password" type="password" minlength="12" required autocomplete="new-password"></label><label>Şifre tekrar<input name="password_confirm" type="password" minlength="12" required autocomplete="new-password"></label><button class="login-submit">Kayıt Ol <span>→</span></button><div class="login-links auth-switch"><span>Zaten hesabın var mı?</span><button type="button" id="back-to-login">Giriş Yap</button></div><small>Şifreniz diske kaydedilmez. Oturum anahtarı Windows Credential Manager ile korunur.</small></form></main>`;
   const background=config.branding?.login_background||(config.login_background_url?{type:"image",image_url:config.login_background_url,overlay:60}:undefined);mountBackgroundMedia(document.querySelector<HTMLElement>(".login-visual")!,background,asset,60);
   document.querySelector("#back-to-login")!.addEventListener("click",()=>loginView());document.querySelector("#retry-register")?.addEventListener("click",()=>registerView());
-  document.querySelector<HTMLFormElement>("#register-form")!.onsubmit=async event=>{event.preventDefault();const form=new FormData(event.currentTarget as HTMLFormElement);const input={displayName:String(form.get("display_name")||""),email:String(form.get("email")||""),password:String(form.get("password")||""),passwordConfirm:String(form.get("password_confirm")||"")};const validation=validateRegistration(input);if(validation){registerView(validation);return}const submit=document.querySelector<HTMLButtonElement>(".login-submit")!;submit.disabled=true;submit.textContent="Hesap oluşturuluyor…";try{state.user=await api.register(input.displayName,input.email,input.password);await boot()}catch(e){registerView(e instanceof Error?e.message:"Kayıt tamamlanamadı",true)}};
+  document.querySelector<HTMLFormElement>("#register-form")!.onsubmit=async event=>{event.preventDefault();const form=new FormData(event.currentTarget as HTMLFormElement);const input={displayName:String(form.get("display_name")||""),email:String(form.get("email")||""),password:String(form.get("password")||""),passwordConfirm:String(form.get("password_confirm")||"")};const validation=validateRegistration(input);if(validation){registerView(validation);return}const submit=document.querySelector<HTMLButtonElement>(".login-submit")!;submit.disabled=true;submit.textContent="Hesap oluşturuluyor…";try{state.user=await api.register(input.displayName,input.email,input.password);accessView("Hesabın oluşturuldu. Doğrulama bağlantısı e-posta adresine gönderildi.")}catch(e){registerView(e instanceof Error?e.message:"Kayıt tamamlanamadı",true)}};
 }
 
 function shell(){
@@ -250,7 +298,7 @@ function shell(){
   document.querySelector("#support-link")!.addEventListener("click",()=>void openLink(config.support_url,"Destek bağlantısı henüz tanımlanmadı."));
   const social=document.querySelector<HTMLElement>("#social-links");
   if(social){
-    ([["Discord",config.discord_url],["YouTube",config.youtube_url],["Instagram",config.instagram_url],["X",config.x_url]] as [string,string|undefined][])
+    ([["Discord",REQUIRED_DISCORD_INVITE],["YouTube",config.youtube_url],["Instagram",config.instagram_url],["X",config.x_url]] as [string,string|undefined][])
       .filter(([,url])=>Boolean(url))
       .forEach(([label,url])=>{const button=document.createElement("button");button.textContent=label;button.onclick=()=>void openLink(url);social.append(button)});
     social.hidden=social.childElementCount===0;
@@ -833,7 +881,7 @@ async function start(){
   await loadLoaderVersion();
   await loadConfig();
   if(api.hasToken()){
-    try{state.user=await api.me();await boot()}
+    try{state.user=await api.me();await enterAfterAuthentication()}
     catch(error){loginView(error instanceof Error?error.message:"Sunucuya bağlanılamadı.",true)}
   }else loginView();
 }
