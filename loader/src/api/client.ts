@@ -1,4 +1,5 @@
 import {API_BASE_URL} from "../config";
+import {getVersion} from "@tauri-apps/api/app";
 import {log} from "../services/logger";
 import {authSession} from "../auth/session";
 import {deviceId,deviceName} from "../auth/device";
@@ -41,6 +42,7 @@ function userMessage(error:unknown,status=0){
   if(error instanceof DOMException&&error.name==="AbortError")return "Sunucu yanıt vermedi. Lütfen tekrar deneyin.";
   if(error instanceof TypeError||status===0)return "Animus sunucusuna ulaşılamıyor. İnternet bağlantınızı kontrol edin.";
   if(status===401)return "Oturumunuz sona erdi. Lütfen yeniden giriş yapın.";
+  if(status===426)return "Eski Loader sürümü devre dışı. Güncelleme zorunlu.";
   if(error instanceof ApiError && error.message)return error.message;
   if(status===403)return "Bu işlem için yetkiniz bulunmuyor.";
   if(status===429)return "Çok hızlı işlem yapıyorsun. Kısa süre sonra tekrar dene.";
@@ -51,6 +53,10 @@ function userMessage(error:unknown,status=0){
 async function request<T>(path:string,init:RequestInit={}):Promise<T>{
   await initialize();
   const headers=new Headers(init.headers);headers.set("Accept","application/json");
+  // Uygulamanın GERÇEK kurulu sürümünü Tauri metadata'sından alıyoruz.
+  // Tarayıcı geliştirici önizlemesi üretim Loader değildir; header göndermez.
+  const installedVersion=await getVersion().catch(()=>"");
+  if(installedVersion)headers.set("X-Animus-Loader-Version",installedVersion);
   // Cihaz bağı tokenın sunucu tarafındaki device_id alanında tutulur.
   // Burada özel X-* header göndermiyoruz; böylece login dahil isteklerde
   // gereksiz CORS/preflight oluşmaz.
