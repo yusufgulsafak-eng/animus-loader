@@ -1,6 +1,6 @@
 -- SAFE STAGING ONLY. DO NOT RUN UNTIL THE NEW ZIP IS HOSTED.
 -- Existing published stable id=106 is NOT changed. Creates DRAFT 1.0.1.
--- The 012 migration is already installed on yusulvie_animus_loader.
+-- The 012 migration is already installed on the production database.
 -- First: upload Battlefield_V_Belgeler_Duzeltme_1.0.1.zip to a NEW HTTPS URL.
 -- Change the URL below; do NOT use the old MediaFire URL.
 SET @bfv_new_url = 'PASTE_NEW_HTTPS_DOWNLOAD_URL_HERE';
