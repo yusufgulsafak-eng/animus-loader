@@ -41,6 +41,7 @@ function userMessage(error:unknown,status=0){
   if(error instanceof DOMException&&error.name==="AbortError")return "Sunucu yanıt vermedi. Lütfen tekrar deneyin.";
   if(error instanceof TypeError||status===0)return "Animus sunucusuna ulaşılamıyor. İnternet bağlantınızı kontrol edin.";
   if(status===401)return "Oturumunuz sona erdi. Lütfen yeniden giriş yapın.";
+  if(error instanceof ApiError && error.message)return error.message;
   if(status===403)return "Bu işlem için yetkiniz bulunmuyor.";
   if(status===429)return "Çok hızlı işlem yapıyorsun. Kısa süre sonra tekrar dene.";
   if(status>=500)return "Sunucu tarafında bir hata oluştu.";
@@ -89,6 +90,8 @@ export const api={
     return result.user;
   },
   me:()=>request<User>("/auth/me"),
+  resendVerificationEmail:()=>request<{message:string}>("/auth/email/resend",{method:"POST"}),
+  discordLink:()=>request<{url:string}>("/auth/discord/link",{method:"POST"}),
   currentDevice:()=>request<DeviceInfo|null>("/device/current"),
   revokeCurrentDevice:()=>request<{message:string}>("/device/current",{method:"DELETE"}),
 
