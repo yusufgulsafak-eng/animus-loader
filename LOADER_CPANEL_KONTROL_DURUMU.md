@@ -7,8 +7,7 @@ Web kütüphanesinde bu özellikler için yeni düğme yapılmadı.
 ekranı gösterilir. Davet: https://discord.gg/RMP6gGHpKK. Kullanıcı iki
 kontrolü bitirip "Durumu Kontrol Et" dediğinde kütüphaneye geçebilir.
 
-**API:** Production Loader ayarı https://api.yusufgulsafak.com/api olacak şekilde
-düzenlendi. `.env.production`, `.env.production.example`, Tauri production CSP
+**API:** Production Loader yalnızca https://animus-api.intelpol.workers.dev/api adresini kullanır. `.env.production`, `.env.production.example`, Tauri production CSP
 ve GitHub Windows workflow'ları aynı adresi kullanır.
 
 **Sunucu tarafı:** Üyelik doğrulaması/indirme engeli Windows UI kontrolüyle
@@ -28,6 +27,8 @@ sorgusu ve gerçek yama indirmesi burada uçtan uca test edilmedi.
 workflow'ları da cPanel API URL'siyle ayarlanmıştır. Kaynak ZIP'i doğrudan
 cPanel'e yüklemeyin; Loader için yeni Windows kurulum dosyası oluşturun.
 
-**Önemli:** Eski Worker API adresine derlenmiş önceki EXE değişmez. Kullanıcıların
-yeni Loader sürümünü yüklemesi gerekir. Gerçek testler tamamlanmadan güvenlik
+**Önemli:** Eski kurulum dosyaları kendiliğinden güncellenmez. Kaynakları GitHub üzerinde güncelleyip yeni bir release derleyin. Worker, cPanel API'sine proxy olarak bağlanmadan Loader'ın çalıştığı doğrulanmış sayılmaz. Gerçek testler tamamlanmadan güvenlik
 uygulamasını canlıda tam doğrulanmış saymayın.
+
+
+**Yeni Worker dönüşü:** https://animus-api.intelpol.workers.dev görünür endpoint. cPanel APP_URL ve Discord Redirect URI güncellenmeden kullanıcı linkleri gizlenmez. Ayrıntılar WORKER_PUBLIC_API_KURULUM.md.

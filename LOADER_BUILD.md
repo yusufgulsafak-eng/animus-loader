@@ -30,7 +30,7 @@ Testler path traversal, manifest sürümü ve Steam VDF ayrıştırma gibi negat
 ## EXE ve installer
 
 ~~~powershell
-$env:VITE_API_BASE_URL = "https://api.yusufgulsafak.com"
+$env:VITE_API_BASE_URL = "https://animus-api.intelpol.workers.dev"
 npm ci
 npm test
 npm run tauri build -- --config src-tauri/tauri.production.conf.json
@@ -87,7 +87,7 @@ Boş public key ile production self-update yayınlamayın.
 - İki adım tamamlanana kadar Loader kütüphaneyi göstermez. Gerçek güvenlik
   sunucu tarafında indirme tokenı üretiminde ve dosya indirme isteğinde
   uygulanır. Her iki koruma da canlı olarak ayrıca test edilmelidir.
-- Production frontend API hedefi `https://api.yusufgulsafak.com/api` olmalıdır.
+- Production frontend API hedefi `https://animus-api.intelpol.workers.dev/api` olmalıdır.
   `.env.production` ve Windows CI buna ayarlandı. Eski Workers originine
   derlenen exe yeni cPanel API sistemini kullanmaz.
 - Bu zip **kaynak koddur**; Windows exe oluşturulduğu / canlı işleyiş

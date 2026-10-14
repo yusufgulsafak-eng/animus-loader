@@ -26,7 +26,7 @@ mkdir -p web/storage/trash && chmod 750 web/storage/trash
 # Loader
 cd loader && npm ci
 npm test && npx tsc --noEmit
-VITE_API_BASE_URL=https://api.yusufgulsafak.com npm run build
+VITE_API_BASE_URL=https://animus-api.intelpol.workers.dev npm run build
 npm run tauri build
 ```
 
@@ -190,7 +190,7 @@ loader/src/styles.css
 ## 8. Notlar
 
 - `loader/vite.config.ts` production build'de `VITE_API_BASE_URL` değerini
-  `https://api.yusufgulsafak.com` olmaya zorluyor. Bu bilinçli bir güvenlik
+  `https://animus-api.intelpol.workers.dev` olmaya zorluyor. Bu bilinçli bir güvenlik
   kontrolü; repoyu başka bir alan adı için fork ederseniz burayı değiştirmeniz
   gerekir.
 - `web/app/Controllers/Yedek_ApiController.php` (ayrı API yüklemesinde vardı)
