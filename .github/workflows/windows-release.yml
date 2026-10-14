@@ -12,7 +12,7 @@ jobs:
     runs-on: windows-latest
 
     env:
-      VITE_API_BASE_URL: https://animus-api.intelpol.workers.dev
+      VITE_API_BASE_URL: https://api.yusufgulsafak.com
 
     steps:
       - name: Checkout repository
@@ -31,7 +31,7 @@ jobs:
       - name: Validate production API variable
         shell: pwsh
         run: |
-          $expected = "https://animus-api.intelpol.workers.dev"
+          $expected = "https://api.yusufgulsafak.com"
           if ([string]::IsNullOrWhiteSpace($env:VITE_API_BASE_URL)) {
             throw "VITE_API_BASE_URL is required."
           }
@@ -102,7 +102,7 @@ jobs:
             [IO.File]::ReadAllText($_.FullName)
           }) -join "`n"
 
-          $expected = "https://animus-api.intelpol.workers.dev"
+          $expected = "https://api.yusufgulsafak.com"
 
           if (-not $content.Contains($expected)) {
             throw "Production API origin was not embedded in the frontend output."
@@ -116,7 +116,7 @@ jobs:
             "https://localhost",
             "http://127.0.0.1",
             "https://127.0.0.1",
-            "https://api.yusufgulsafak.com",
+            "https://animus-api.intelpol.workers.dev",
             "https://yusufgulsafak.com"
           )
 
