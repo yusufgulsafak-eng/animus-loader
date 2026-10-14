@@ -29,3 +29,21 @@
 .backups .muted{margin:0 0 14px}
 
 .operation .operation-close{right:14px;top:14px;display:grid;place-items:center;padding:0;line-height:1;overflow:hidden;font-family:Arial,sans-serif;font-weight:700}
+
+/* E-posta ve Discord güvenli erişim ekranı */
+.access-form{overflow-y:auto;gap:13px}
+.access-step{padding:16px;border:1px solid rgba(180,200,225,.24);border-radius:12px;margin:8px 0}
+.access-step b{display:block;margin-bottom:8px}
+.access-step p{margin:0 0 12px;line-height:1.5}
+.access-step .login-submit{width:100%}
+.access-secondary{display:block;margin:10px auto;padding:10px;background:transparent;border:0;text-decoration:underline;color:inherit;cursor:pointer}
+
+/* Türkiye'deki Discord erişim engeli için güvenli yönlendirme. */
+.discord-tr-help{margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.035)}
+.discord-tr-help>summary{cursor:pointer;font-weight:750;font-size:13px}
+.discord-tr-help-body{margin-top:10px;font-size:12px;line-height:1.6}
+.discord-tr-help-body ol{padding-left:19px;margin:8px 0 12px}
+.discord-tr-help-body li{margin:5px 0}
+.discord-tr-help-body label{display:block;margin-top:10px;font-weight:700}
+.discord-invite-url{display:block;box-sizing:border-box;width:100%;margin:6px 0 0;padding:9px;border:1px solid var(--line);border-radius:7px;background:#100e16;color:inherit}
+.discord-tr-help-body .access-secondary{text-align:left;margin:9px 0 0}
