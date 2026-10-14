@@ -2,7 +2,7 @@
 
 ## Development
 
-Önce web API'nin çalıştığını ve loader/.env içindeki VITE_API_URL değerinin ona işaret ettiğini doğrulayın.
+Önce web API'nin çalıştığını ve loader/.env içindeki VITE_API_BASE_URL değerinin ona işaret ettiğini doğrulayın.
 
 ~~~powershell
 Set-Location loader
@@ -30,8 +30,10 @@ Testler path traversal, manifest sürümü ve Steam VDF ayrıştırma gibi negat
 ## EXE ve installer
 
 ~~~powershell
-$env:VITE_API_BASE_URL = https://api.example.com
-npm run tauri build
+$env:VITE_API_BASE_URL = "https://api.yusufgulsafak.com"
+npm ci
+npm test
+npm run tauri build -- --config src-tauri/tauri.production.conf.json
 ~~~
 
 Çıktılar loader/src-tauri/target/release ve bundle altındaki nsis/msi dizinlerinde oluşur. Product name ve application identifier loader/src-tauri/tauri.conf.json içindedir.
@@ -71,3 +73,22 @@ Patch güncellemesi ile loader güncellemesi ayrıdır. Loader /api/loader/lates
 4. İmzalı installer ve signature dosyasını loader_versions kaydıyla yayınlayın.
 
 Boş public key ile production self-update yayınlamayın.
+
+## E-posta + Discord kapısı (yalnız Windows Loader)
+
+- Kullanıcı girişinden sonra e-posta doğrulaması ve Discord bağlama işlemleri
+  Loader arayüzündeki `HESAP GÜVENLİĞİ` ekranında yapılır. Web
+  kütüphanesine ayrıca buton eklenmez.
+- **E-posta doğrula:** `POST /api/auth/email/resend` ile yeni doğrulama
+  bağlantısı istenir; bağlantı kullanıcının sistem tarayıcısında açılır.
+- **Discord ile Bağlan:** `POST /api/auth/discord/link` resmi Discord
+  OAuth2 sayfasını açar; zorunlu sunucu daveti: https://discord.gg/RMP6gGHpKK
+  (Guild ID: 1480052266508746967).
+- İki adım tamamlanana kadar Loader kütüphaneyi göstermez. Gerçek güvenlik
+  sunucu tarafında indirme tokenı üretiminde ve dosya indirme isteğinde
+  uygulanır. Her iki koruma da canlı olarak ayrıca test edilmelidir.
+- Production frontend API hedefi `https://api.yusufgulsafak.com/api` olmalıdır.
+  `.env.production` ve Windows CI buna ayarlandı. Eski Workers originine
+  derlenen exe yeni cPanel API sistemini kullanmaz.
+- Bu zip **kaynak koddur**; Windows exe oluşturulduğu / canlı işleyiş
+  test edildiği anlamına gelmez.
