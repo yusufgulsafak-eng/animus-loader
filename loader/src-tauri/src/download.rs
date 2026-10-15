@@ -375,6 +375,106 @@ pub fn clear_cache() -> Result<u64> {
     Ok(freed)
 }
 
+// MediaFire/CDN Range yaniti mevcut ZIP parcasinin devamindan baslamali.
+// 206 status tek basina yeterli degildir: Content-Range hataliysa ZIP bozulur.
+fn valid_resume_content_range(
+    headers: &reqwest::header::HeaderMap,
+    existing: u64,
+    expected_size: u64,
+) -> bool {
+    if existing == 0 || existing >= expected_size {
+        return false;
+    }
+
+    if let Some(encoding) = headers.get(reqwest::header::CONTENT_ENCODING) {
+        if !encoding.as_bytes().eq_ignore_ascii_case(b"identity") {
+            return false;
+        }
+    }
+
+    let Some(value) = headers
+        .get(reqwest::header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return false;
+    };
+    let Some(ranges) = value.strip_prefix("bytes ") else {
+        return false;
+    };
+    let Some((span, total)) = ranges.split_once('/') else {
+        return false;
+    };
+    let Some((first, last)) = span.split_once('-') else {
+        return false;
+    };
+    let Ok(first) = first.parse::<u64>() else {
+        return false;
+    };
+    let Ok(last) = last.parse::<u64>() else {
+        return false;
+    };
+    let Ok(total) = total.parse::<u64>() else {
+        return false;
+    };
+
+    if first != existing || last != expected_size - 1 || total != expected_size {
+        return false;
+    }
+    if let Some(length) = headers.get(reqwest::header::CONTENT_LENGTH) {
+        let Some(length) = length.to_str().ok().and_then(|s| s.parse::<u64>().ok()) else {
+            return false;
+        };
+        if length != expected_size - existing {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+mod resume_range_tests {
+    use super::valid_resume_content_range;
+    use reqwest::header::{HeaderMap, HeaderValue, CONTENT_RANGE, CONTENT_LENGTH, CONTENT_ENCODING};
+
+    fn response_headers(range: &str, length: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(CONTENT_RANGE, HeaderValue::from_str(range).unwrap());
+        h.insert(CONTENT_LENGTH, HeaderValue::from_str(length).unwrap());
+        h
+    }
+
+    #[test]
+    fn valid_range_allows_resume() {
+        assert!(valid_resume_content_range(&response_headers("bytes 10-99/100", "90"), 10, 100));
+    }
+
+    #[test]
+    fn wrong_offset_is_rejected() {
+        assert!(!valid_resume_content_range(&response_headers("bytes 11-99/100", "89"), 10, 100));
+    }
+
+    #[test]
+    fn wrong_total_is_rejected() {
+        assert!(!valid_resume_content_range(&response_headers("bytes 10-98/100", "89"), 10, 100));
+        assert!(!valid_resume_content_range(&response_headers("bytes 10-99/101", "90"), 10, 100));
+    }
+
+    #[test]
+    fn missing_or_invalid_header_is_rejected() {
+        assert!(!valid_resume_content_range(&HeaderMap::new(), 10, 100));
+        assert!(!valid_resume_content_range(&response_headers("bytes bad", "90"), 10, 100));
+        assert!(!valid_resume_content_range(&response_headers("bytes 10-99/100", "50"), 10, 100));
+        assert!(!valid_resume_content_range(&response_headers("bytes 10-99/100", "90"), 0, 100));
+    }
+
+    #[test]
+    fn compressed_partial_response_is_rejected() {
+        let mut h = response_headers("bytes 10-99/100", "90");
+        h.insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+        assert!(!valid_resume_content_range(&h, 10, 100));
+    }
+}
+
 const DOWNLOAD_MAX_ATTEMPTS: usize = 5;
 
 fn is_retryable_download_error(
@@ -728,6 +828,17 @@ fn download_once(
         existing > 0
             && response.status()
                 == reqwest::StatusCode::PARTIAL_CONTENT;
+
+    if response.status() == reqwest::StatusCode::PARTIAL_CONTENT
+        && (!resumed || !valid_resume_content_range(response.headers(), existing, expected_size))
+    {
+        // Hatali Range parcasini eski ZIP'in sonuna eklemek butunlugu bozar.
+        // Onbellegi temizle; ustteki retry mantigi yeni CDN linkiyle bastan dener.
+        let _ = std::fs::remove_file(target);
+        return Err(LoaderError::Other(
+            "Geçici indirme hatası: MediaFire geçersiz byte aralığı döndürdü, sıfırdan deneniyor.".into(),
+        ));
+    }
 
     let mut output = if resumed {
         let mut file =
