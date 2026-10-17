@@ -127,6 +127,10 @@ jobs:
             }
           }
 
+      - name: Test large FORGE hash offsets
+        shell: pwsh
+        run: ./tests/shadows-forge-int64-offset.ps1
+
       - name: Run Rust tests
         run: cargo test --manifest-path loader/src-tauri/Cargo.toml
 
