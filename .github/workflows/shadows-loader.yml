@@ -4,6 +4,19 @@ on:
   workflow_dispatch:
   push:
     branches: [codex/shadows-loader-install]
+  pull_request:
+    branches: [main]
+    paths:
+      - 'loader/**'
+      - 'tests/**'
+      - 'schemas/**'
+      - 'web/app/Services/ManifestValidator.php'
+      - 'web/app/Services/AdminService.php'
+      - '.github/workflows/shadows-loader.yml'
+
+concurrency:
+  group: shadows-loader-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
