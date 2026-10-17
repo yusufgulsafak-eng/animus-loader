@@ -177,7 +177,7 @@ final class AdminService
         // Gercek oyun ve surum bilgilerini kullan.
         // Sabit "validation" slug'i RUN_BAT kontrolunu yaniltir.
         $stmt = $pdo->prepare(
-            'SELECT g.slug, g.process_name, pv.minimum_loader_version
+            'SELECT g.id detection_game_id, g.slug, g.executable, g.process_name, pv.minimum_loader_version
              FROM patch_versions pv
              JOIN patches p ON p.id = pv.patch_id
              JOIN games g ON g.id = p.game_id
@@ -188,6 +188,10 @@ final class AdminService
         if (!$version) {
             throw new DomainException('Patch surumu bulunamadi.');
         }
+
+        $rules = $pdo->prepare("SELECT rule_value FROM game_detection_rules WHERE game_id=? AND rule_type='required_file' ORDER BY sort_order,id");
+        $rules->execute([$version['detection_game_id']]);
+        $requiredFiles = $rules->fetchAll(PDO::FETCH_COLUMN);
 
         $actions = array_values($actions);
         $manifestActions = [];
@@ -214,9 +218,9 @@ final class AdminService
                 'slug' => $version['slug'],
             ],
             'detection' => [
-                'executable' => 'Validation.exe',
+                'executable' => $version['executable'] ?: 'Validation.exe',
                 'process_name' => $version['process_name'],
-                'required_files' => [],
+                'required_files' => $requiredFiles,
             ],
             'patch' => [
                 'version' => '0.0.0',

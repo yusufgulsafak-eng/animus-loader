@@ -21,3 +21,6 @@ pub mod security { pub use crate::path; }
 #[path="../../../loader/src-tauri/src/patch/fat_dat.rs"]
 pub mod fat_dat;
 
+
+#[path="../../../loader/src-tauri/src/patch/shadows.rs"]
+pub mod shadows;

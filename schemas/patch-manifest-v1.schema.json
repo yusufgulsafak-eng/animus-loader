@@ -234,7 +234,8 @@
             "MOVE_FILE",
             "RENAME_FILE",
             "APPEND_FAT_DAT",
-            "RUN_BAT"
+            "RUN_BAT",
+            "INSTALL_SHADOWS"
           ]
         },
         "source": {
@@ -359,6 +360,42 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "INSTALL_SHADOWS"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "source",
+              "expected_sha256"
+            ],
+            "properties": {
+              "source": {
+                "const": "MANIFEST_SHA256.txt"
+              },
+              "destination": {
+                "const": "DataPC_boot.forge"
+              },
+              "backup": {
+                "const": true
+              },
+              "expected_sha256": {
+                "const": "ee397ca77e96e0a1c53fff3cf0d26cd58b64a99cdad8c69d9ef34014d87ff6e4"
+              },
+              "options": {
+                "type": "object",
+                "maxProperties": 0
+              }
+            }
+          }
         }
       ]
     },
@@ -403,6 +440,95 @@
                 "const": "battlefield-v"
               }
             }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "install_actions": {
+            "contains": {
+              "properties": {
+                "type": {
+                  "const": "INSTALL_SHADOWS"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            }
+          }
+        },
+        "required": [
+          "install_actions"
+        ]
+      },
+      "then": {
+        "properties": {
+          "game": {
+            "properties": {
+              "slug": {
+                "enum": [
+                  "assassins-creed-shadows",
+                  "assassins-creed-shadows-orijinal"
+                ]
+              }
+            }
+          },
+          "detection": {
+            "required": [
+              "process_name"
+            ],
+            "properties": {
+              "executable": {
+                "const": "ACShadows.exe"
+              },
+              "process_name": {
+                "const": "ACShadows.exe"
+              },
+              "required_files": {
+                "allOf": [
+                  {
+                    "contains": {
+                      "const": "DataPC_boot.forge"
+                    }
+                  },
+                  {
+                    "contains": {
+                      "const": "DataPC_boot_patch_01.forge"
+                    }
+                  },
+                  {
+                    "contains": {
+                      "const": "DataPC_boot_patch_02.forge"
+                    }
+                  },
+                  {
+                    "contains": {
+                      "const": "dlc_20/DataPC_boot_20_dlc.forge"
+                    }
+                  },
+                  {
+                    "contains": {
+                      "const": "dlc_20/DataPC_boot_20_dlc_patch_01.forge"
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "patch": {
+            "properties": {
+              "minimum_loader_version": {
+                "not": {
+                  "pattern": "^0\\.1\\.[0-4](?:[-+].*)?$|^0\\.0\\."
+                }
+              }
+            }
+          },
+          "install_actions": {
+            "maxItems": 1
           }
         }
       }
