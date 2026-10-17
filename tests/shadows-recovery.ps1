@@ -101,3 +101,6 @@ try{
 }finally{
  if(Test-Path -LiteralPath $Workspace){Remove-Item -LiteralPath $Workspace -Recurse -Force}
 }
+
+# Expected child rejections must not leak LASTEXITCODE to the Actions wrapper.
+exit 0
