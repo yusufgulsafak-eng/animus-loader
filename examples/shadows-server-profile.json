@@ -1,0 +1,42 @@
+{
+  "edition": "ORIJINAL",
+  "game": {
+    "allowed_slugs": [
+      "assassins-creed-shadows",
+      "assassins-creed-shadows-orijinal"
+    ],
+    "executable": "ACShadows.exe",
+    "process_name": "ACShadows.exe",
+    "required_files": [
+      "DataPC_boot.forge",
+      "DataPC_boot_patch_01.forge",
+      "DataPC_boot_patch_02.forge",
+      "dlc_20/DataPC_boot_20_dlc.forge",
+      "dlc_20/DataPC_boot_20_dlc_patch_01.forge"
+    ]
+  },
+  "patch": {
+    "version": "1.0.0-shadows.1",
+    "status": "DRAFT",
+    "channel": "internal",
+    "minimum_loader_version": "0.1.5"
+  },
+  "archive": {
+    "source_type": "external",
+    "external_url": "https://www.mediafire.com/file/pi789nzgd1gyle1/ANIMUS_AC_SHADOWS.zip/file",
+    "original_name": "ANIMUS_AC_SHADOWS.zip",
+    "size_bytes": 83350413,
+    "sha256": "931fd60132db50320a7db4bc815a371d752352a7acdb4e57ee1153d65899aed0"
+  },
+  "install_actions": [
+    {
+      "id": "762b942d-58d8-4524-beb7-ae37cce1a6d7",
+      "type": "INSTALL_SHADOWS",
+      "source": "MANIFEST_SHA256.txt",
+      "destination": "DataPC_boot.forge",
+      "backup": true,
+      "expected_sha256": "ee397ca77e96e0a1c53fff3cf0d26cd58b64a99cdad8c69d9ef34014d87ff6e4",
+      "options": {}
+    }
+  ]
+}

@@ -42,10 +42,21 @@ Configure the existing original-game entry with executable and process
 - `dlc_20/DataPC_boot_20_dlc.forge`
 - `dlc_20/DataPC_boot_20_dlc_patch_01.forge`
 
-Use the single action from `LOADER_PROFILI.json`. Upload the resulting ZIP to the
-chosen MediaFire location, then configure that archive's actual URL, byte size and
-SHA-256 in the existing external-archive form. The existing download flow handles
-MediaFire. No URL, database IDs or live patch version are invented by this change.
+The owner supplied the MediaFire URL, byte size and SHA-256 for the generated
+payload. Its report matches the local ZIP and all 1317 file paths/sizes. The
+remote MediaFire bytes could not be retrieved from this environment.
+`examples/shadows-server-profile.json` records those supplied archive values and
+the single action from `LOADER_PROFILI.json`.
+
+After migration 030, `web/database/031_shadows_mediafire_draft.sql` stages that
+package as `1.0.0-shadows.1`, `internal`, `DRAFT`. It finds the original-game slug
+without assuming database IDs, creates an inactive game if missing, and refuses
+ambiguous games, multiple patches, duplicate versions or incompatible published
+detection profiles. It preserves existing releases. New games default to premium;
+existing game access is retained. Publication uses the existing admin validator.
+See [the Turkish server setup instructions](shadows-server-kurulum.md) for the
+deployment order and making the draft available to a test account. No live SQL
+or server deployment has been performed.
 
 ## Verification
 
