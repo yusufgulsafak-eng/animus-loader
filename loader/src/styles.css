@@ -47,3 +47,10 @@
 .discord-tr-help-body label{display:block;margin-top:10px;font-weight:700}
 .discord-invite-url{display:block;box-sizing:border-box;width:100%;margin:6px 0 0;padding:9px;border:1px solid var(--line);border-radius:7px;background:#100e16;color:inherit}
 .discord-tr-help-body .access-secondary{text-align:left;margin:9px 0 0}
+
+/* One-click yama actions: only supported manifest patch actions are executable. */
+.patch-card-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:11px}
+.patch-card-actions button{min-height:36px;border-radius:9px;border:1px solid var(--line);font-size:10px;font-weight:900;cursor:pointer;padding:7px 5px}
+.patch-card-actions .patch-card-install{background:var(--accent);color:#12140b;border-color:transparent}
+.patch-card-actions .patch-card-uninstall{background:#ff53631a;color:#ff9da6;border-color:#ff536344}
+.patch-card-actions button:disabled{opacity:.35;cursor:not-allowed}
