@@ -813,15 +813,27 @@ fn download_once(
     if !actual.eq_ignore_ascii_case(
         expected_hash,
     ) {
-        let _ =
-            std::fs::remove_file(target);
-
-        return Err(
-            LoaderError::Integrity(
-                "İndirilen yama dosyasının bütünlüğü doğrulanamadı."
-                    .into(),
+        // Keep verification strict, but report enough information to
+        // distinguish a stale EXE, CDN mismatch, and a wrong manifest.
+        // Never log a signed CDN query string or token.
+        let cdn_host = response
+            .url()
+            .host_str()
+            .unwrap_or("(bilinmiyor)");
+        let _ = crate::logging::event(
+            "error",
+            "download_integrity",
+            &format!(
+                "SHA256 uyuşmazlığı: beklenen={expected_hash}; gelen={actual}; boyut={downloaded}; cdn_host={cdn_host}"
             ),
         );
+        let _ = std::fs::remove_file(target);
+
+        return Err(LoaderError::Integrity(
+            format!(
+                "İndirilen yama dosyasının bütünlüğü doğrulanamadı. Beklenen SHA256: {expected_hash}; indirilen SHA256: {actual}; boyut: {downloaded} bayt. Ayrıntılar: Loader günlüğü."
+            ),
+        ));
     }
 
     let _ = crate::logging::event(
