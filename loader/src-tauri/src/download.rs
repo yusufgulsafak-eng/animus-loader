@@ -666,7 +666,7 @@ fn download_once(
         if !valid_range {
             let _ = std::fs::remove_file(target);
             return Err(LoaderError::Other(
-                "Geçersiz CDN Range cevabı; indirme baştan denenecek.".into()
+                "Geçici indirme hatası: CDN Content-Range uyuşmuyor, indirme baştan denenecek.".into()
             ));
         }
     }
