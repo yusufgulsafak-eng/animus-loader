@@ -14,3 +14,5 @@ loader/node_modules/
 loader/dist/
 loader/src-tauri/target/
 deploy/
+
+/tests/fat-dat-harness/target/

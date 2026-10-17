@@ -78,6 +78,7 @@ pub enum ActionType {
     MoveFile,
     RenameFile,
     AppendFatDat,
+    InstallShadows,
     RunBat,
 }
 
@@ -99,6 +100,7 @@ pub enum ChangeKind {
     CreatedDirectory,
     MovedFile,
     PatchedArchive,
+    ShadowsPatch,
     DocumentsFile,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
