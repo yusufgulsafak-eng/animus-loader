@@ -54,6 +54,16 @@ function FinishProgress(){Write-Progress -Id 1 -Activity 'ANIMUS SHADOWS - YAMA 
 
 # FAST: compute both the full SHA-256 and unchanged-body SHA-256 in ONE scan.
 # Both values are still stored in the original v2 uninstall journal.
+# Bytes-to-skip in this read buffer before the immutable FORGE body begins.
+# All file offsets are 64-bit. Narrow to int ONLY after clamping to the
+# current read size; otherwise [Math]::Max(0, huge-negative-int64) may
+# select its Int32 overload and fail for files larger than 2 GiB.
+function Get-ForgeBodyBlockStart([long]$Prefix,[long]$Offset,[int]$BytesRead){
+  if($Offset -ge $Prefix){return [int]0}
+  [long]$remainingPrefix=$Prefix-$Offset
+  if($remainingPrefix -ge $BytesRead){return [int]$BytesRead}
+  return [int]$remainingPrefix
+}
 function HashForgePair([string]$File,[long]$Prefix,[long]$Length){
   SafeFile $File
   $src=[IO.File]::Open($File,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
@@ -69,7 +79,7 @@ function HashForgePair([string]$File,[long]$Prefix,[long]$Length){
       $n=$src.Read($buf,0,$wanted)
       if($n -le 0){Die "FORGE hash okunamadi: $File"}
       [void]$whole.TransformBlock($buf,0,$n,$buf,0)
-      $bodyStart=[int][Math]::Max(0,[long]$Prefix-$offset)
+      $bodyStart=Get-ForgeBodyBlockStart -Prefix $Prefix -Offset $offset -BytesRead $n
       if($bodyStart -lt $n){
         [void]$body.TransformBlock($buf,$bodyStart,$n-$bodyStart,$buf,$bodyStart)
       }
