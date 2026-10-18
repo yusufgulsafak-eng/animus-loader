@@ -76,6 +76,24 @@ $newBfv['install_actions'][1]['expected_sha256'] = '7016526b403eff2374a2874274a2
 expect((new ManifestValidator())->validate($newBfv)===[], 'known-folder BFV BAT accepted');
 $newBfv['patch']['minimum_loader_version'] = '0.1.2';
 expect((new ManifestValidator())->validate($newBfv)!==[], 'new BAT rejects Loader 0.1.2');
+require __DIR__.'/../shadows-contract.php';
+$shadows = shadows_test_manifest();
+expect((new ManifestValidator())->validate($shadows)===[], 'pinned Shadows profile accepted');
+foreach ([
+ 'old loader' => function(&$x){$x['patch']['minimum_loader_version']='0.1.4';},
+ 'wrong game' => function(&$x){$x['game']['slug']='another-game';},
+ 'wrong executable' => function(&$x){$x['detection']['executable']='Another.exe';},
+ 'wrong process' => function(&$x){$x['detection']['process_name']='Another.exe';},
+ 'missing DLC forge' => function(&$x){array_pop($x['detection']['required_files']);},
+ 'mixed actions' => function(&$x){$x['install_actions'][]=$x['install_actions'][0];},
+ 'changed manifest hash' => function(&$x){$x['install_actions'][0]['expected_sha256']=str_repeat('0',64);},
+ 'renamed source' => function(&$x){$x['install_actions'][0]['source']='Other.txt';},
+ 'no backup' => function(&$x){$x['install_actions'][0]['backup']=false;},
+ 'arbitrary option' => function(&$x){$x['install_actions'][0]['options']=['execute'=>'unapproved.exe'];},
+] as $name=>$change) {
+ $copy=$shadows;$change($copy);
+ expect((new ManifestValidator())->validate($copy)!==[], "Shadows rejects {$name}");
+}
 echo "PASS: {$tests} PHP security/manifest assertions.\n";
 
 

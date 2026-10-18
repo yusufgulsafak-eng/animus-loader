@@ -7,8 +7,8 @@ use App\Core\PathGuard;
 
 final class ManifestValidator
 {
-    public const ACTIONS = ['COPY_FILE','COPY_DIRECTORY','REPLACE_FILE','DELETE_FILE','DELETE_DIRECTORY','CREATE_DIRECTORY','MOVE_FILE','RENAME_FILE','APPEND_FAT_DAT','RUN_BAT'];
-    private const SOURCE_REQUIRED = ['COPY_FILE','COPY_DIRECTORY','REPLACE_FILE','APPEND_FAT_DAT','RUN_BAT'];
+    public const ACTIONS = ['COPY_FILE','COPY_DIRECTORY','REPLACE_FILE','DELETE_FILE','DELETE_DIRECTORY','CREATE_DIRECTORY','MOVE_FILE','RENAME_FILE','APPEND_FAT_DAT','RUN_BAT','INSTALL_SHADOWS'];
+    private const SOURCE_REQUIRED = ['COPY_FILE','COPY_DIRECTORY','REPLACE_FILE','APPEND_FAT_DAT','RUN_BAT','INSTALL_SHADOWS'];
 
     public function validate(array $manifest): array
     {
@@ -41,6 +41,23 @@ final class ManifestValidator
                     || $minVersion === null
                     || version_compare((string)($manifest['patch']['minimum_loader_version'] ?? '0'), (string)$minVersion, '<')
                 ) $errors[] = "{$label}: RUN_BAT icin dogrulanmis Install.bat ve hash ile uyumlu minimum Loader surumu gerekli.";
+            }
+            if ($type === 'INSTALL_SHADOWS') {
+                $required = ['DataPC_boot.forge','DataPC_boot_patch_01.forge','DataPC_boot_patch_02.forge','dlc_20/DataPC_boot_20_dlc.forge','dlc_20/DataPC_boot_20_dlc_patch_01.forge'];
+                $options = $action['options'] ?? [];
+                if (is_object($options)) $options = (array)$options;
+                if (!in_array($manifest['game']['slug'] ?? '', ['assassins-creed-shadows','assassins-creed-shadows-orijinal'], true)
+                    || ($manifest['detection']['executable'] ?? '') !== 'ACShadows.exe'
+                    || ($manifest['detection']['process_name'] ?? '') !== 'ACShadows.exe'
+                    || version_compare((string)($manifest['patch']['minimum_loader_version'] ?? '0'), '0.1.5', '<')
+                    || count($manifest['install_actions']) !== 1
+                    || array_diff($required, (array)($manifest['detection']['required_files'] ?? []))
+                    || ($action['source'] ?? '') !== 'MANIFEST_SHA256.txt'
+                    || ($action['destination'] ?? '') !== 'DataPC_boot.forge'
+                    || ($action['backup'] ?? false) !== true
+                    || ($action['expected_sha256'] ?? '') !== 'ee397ca77e96e0a1c53fff3cf0d26cd58b64a99cdad8c69d9ef34014d87ff6e4'
+                    || $options !== []
+                ) $errors[] = "{$label}: INSTALL_SHADOWS icin sabit ORIJINAL paket profili, bes FORGE, backup=true ve Loader 0.1.5 gereklidir.";
             }
             if ($type === 'APPEND_FAT_DAT') {
                 if (version_compare((string)($manifest['patch']['minimum_loader_version'] ?? '0'), '0.1.1', '<')) $errors[] = "{$label}: Minimum Loader sürümü 0.1.1 olmalıdır.";

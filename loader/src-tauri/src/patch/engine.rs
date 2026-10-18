@@ -152,6 +152,16 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<()> {
         }
     }
     for action in &manifest.install_actions {
+        if action.kind == ActionType::InstallShadows {
+            crate::patch::shadows::validate_action(action)?;
+            if !matches!(manifest.game.slug.as_str(), "assassins-creed-shadows" | "assassins-creed-shadows-orijinal")
+                || !version_at_least(&manifest.patch.minimum_loader_version, "0.1.5")
+                || manifest.detection.executable != "ACShadows.exe"
+                || manifest.detection.process_name.as_deref() != Some("ACShadows.exe")
+                || manifest.install_actions.len() != 1
+                || crate::patch::shadows::TARGETS.iter().any(|(_, path)| !manifest.detection.required_files.iter().any(|p| p == path))
+            { return Err(LoaderError::Manifest("INSTALL_SHADOWS: ORIJINAL oyun profili, bes FORGE ve Loader 0.1.5 gerekli".into())); }
+        }
         if action.kind == ActionType::AppendFatDat {
             crate::patch::fat_dat::options(action)?;
             if !version_at_least(&manifest.patch.minimum_loader_version, "0.1.1") {
@@ -268,6 +278,11 @@ pub fn dry_run(manifest: &Manifest, game_root: &Path) -> Result<DryRun> {
                         }
                     }
                 }
+            }
+            ActionType::InstallShadows => {
+                result.changed_files += 5;
+                result.backup_files += 5;
+                result.estimated_disk_bytes = result.estimated_disk_bytes.saturating_add(crate::patch::shadows::disk_bytes(game_root)?);
             }
             ActionType::AppendFatDat => {
                 result.changed_files += 2;
@@ -422,6 +437,23 @@ pub fn install(
         Box::new(RunBatHandler),
     ];
     for (index, action) in manifest.install_actions.iter().enumerate() {
+        if action.kind == ActionType::InstallShadows {
+            let registration = installation_path(manifest.game.id)?;
+            if let Err(error) = crate::patch::shadows::install(
+                action, &extracted, game_root, &backup, &mut installation, &registration,
+                |percent, message| { let _ = app.emit("patch-progress", Progress {
+                    stage: "install".into(), percent: 60 + (u16::from(percent.min(100)) * 35 / 100) as u8,
+                    message: message.into(), downloaded_bytes: None, total_bytes: None, bytes_per_second: None,
+                }); },
+            ) {
+                match rollback_changes(game_root, &backup, &installation.changes) {
+                    Ok(()) => crate::backup::close_installation(&installation)?,
+                    Err(rollback) => return Err(LoaderError::Other(format!("{error}. Geri alma durdu: {rollback}. Yedek korundu: {}", backup.display()))),
+                }
+                return Err(error);
+            }
+            continue;
+        }
         if action.kind == ActionType::AppendFatDat {
             let registration = installation_path(manifest.game.id)?;
             if let Err(error) = crate::patch::fat_dat::install(
@@ -1083,6 +1115,7 @@ fn rollback_changes(game: &Path, backup: &Path, changes: &[ChangeRecord]) -> Res
                 }
             },
             ChangeKind::PatchedArchive => crate::patch::fat_dat::restore(game, backup, change)?,
+            ChangeKind::ShadowsPatch => crate::patch::shadows::restore(game, backup, change)?,
             ChangeKind::CreatedFile => {
                 if path.is_file() {
                     fs::remove_file(path)?;
@@ -1152,7 +1185,12 @@ pub fn verify_installation(game_id: u64, game_root: &Path) -> Result<Verificatio
 fn verify_records_with_backup(game: &Path, backup: &Path, changes: &[ChangeRecord]) -> Result<Verification> {
     let mut result = Verification { valid: true, checked: 0, conflicts: vec![] };
     for change in changes {
-        if change.kind == ChangeKind::PatchedArchive {
+        if change.kind == ChangeKind::ShadowsPatch {
+            result.checked += 5;
+            if !crate::patch::shadows::verify(game, backup, change)? {
+                result.conflicts.push("Shadows FORGE dosyalari veya bekleyen kurulum".into());
+            }
+        } else if change.kind == ChangeKind::PatchedArchive {
             result.checked += 2;
             if !crate::patch::fat_dat::verify(game, backup, change)? {
                 result.conflicts.push(change.path.clone());
@@ -1168,7 +1206,7 @@ fn verify_records_with_backup(game: &Path, backup: &Path, changes: &[ChangeRecor
     Ok(result)
 }
 fn is_archive_install(changes: &[ChangeRecord]) -> bool {
-    changes.len() == 1 && changes[0].kind == ChangeKind::PatchedArchive
+    changes.len() == 1 && matches!(changes[0].kind, ChangeKind::PatchedArchive | ChangeKind::ShadowsPatch)
 }
 
 fn backup_material_exists(id: &str) -> Result<bool> {

@@ -4,6 +4,7 @@ use std::path::{Component, Path, PathBuf};
 pub fn validate_relative(value: &str) -> Result<PathBuf> {
     if value.trim().is_empty()
         || value.contains('\0')
+        || value.contains(':')
         || value.starts_with("\\\\")
         || value.starts_with("//")
     {

@@ -91,146 +91,65 @@ fn decode_html_attribute(
         .replace("&#47;", "/")
 }
 
-fn extract_href_from_area(
-    area: &str,
-) -> Option<String> {
-    for prefix in ["href=\"", "href='"] {
-        let Some(start) = area.find(prefix) else {
-            continue;
-        };
+// MediaFire file pages must resolve to the real ZIP CDN, not an HTML
+// landing page, advertisement, or an unrelated HTTPS link.
+fn mediafire_zip_url(value: &str) -> Option<String> {
+    let decoded = decode_html_attribute(value).replace("\\/", "/");
+    let url = reqwest::Url::parse(&decoded).ok()?;
+    let host = url.host_str()?.to_ascii_lowercase();
+    let subdomain = host.split('.').next().unwrap_or("");
 
-        let quote = if prefix.ends_with('"') {
-            '"'
-        } else {
-            '\''
-        };
-
-        let value_start = start + prefix.len();
-        let tail = &area[value_start..];
-
-        let Some(end) = tail.find(quote) else {
-            continue;
-        };
-
-        let value =
-            decode_html_attribute(&tail[..end]);
-
-        if value.starts_with("https://") {
-            return Some(value);
-        }
+    if url.scheme() != "https"
+        || !host.ends_with(".mediafire.com")
+        || !subdomain.starts_with("download")
+        || !url.path().to_ascii_lowercase().ends_with(".zip")
+    {
+        return None;
     }
 
-    None
+    Some(url.to_string())
 }
 
-/// MediaFire /file/.../file sayfasındaki gerçek CDN indirme linkini bulur.
-/// Sayfanın kendisi 100-400 KB HTML olduğu için bunu yapmadan arşiv diye
-/// indirmek, ekrandaki "beklenen 3.3 GB / indirilen 332 KB" hatasına yol açar.
-fn extract_mediafire_direct_url(
-    html: &str,
-) -> Option<String> {
-    // MediaFire'ın klasik downloadButton öğesi.
-    for marker in [
-        "id=\"downloadButton\"",
-        "id='downloadButton'",
-    ] {
-        if let Some(marker_pos) = html.find(marker) {
-            let start =
-                marker_pos.saturating_sub(8192);
-            let end =
-                (marker_pos + 8192).min(html.len());
+/// Resolve MediaFire's download button first, then look for a validated
+/// CDN URL in JavaScript as a fallback. Do not use a nearby anchor's href.
+fn extract_mediafire_direct_url(html: &str) -> Option<String> {
+    let mut remaining = html;
+    while let Some(start) = remaining.find("<a") {
+        let tail = &remaining[start..];
+        let Some(end) = tail.find('>') else { break };
+        let tag = &tail[..end];
 
-            let area = &html[start..end];
-
-            // href çoğu zaman id'den önce olduğu için son href'i tercih et.
-            let before_len =
-                marker_pos.saturating_sub(start);
-            let before = &area[..before_len];
-
-            for prefix in ["href=\"", "href='"] {
-                if let Some(pos) =
-                    before.rfind(prefix)
-                {
-                    let quote =
-                        if prefix.ends_with('"') {
-                            '"'
-                        } else {
-                            '\''
-                        };
-
-                    let value_start =
-                        pos + prefix.len();
-                    let tail =
-                        &before[value_start..];
-
-                    if let Some(value_end) =
-                        tail.find(quote)
-                    {
-                        let value =
-                            decode_html_attribute(
-                                &tail[..value_end],
-                            );
-
-                        if value.starts_with(
-                            "https://",
-                        ) {
-                            return Some(value);
+        if tag.contains("id=\"downloadButton\"")
+            || tag.contains("id='downloadButton'")
+        {
+            for marker in ["href=\"", "href='"] {
+                if let Some(pos) = tag.find(marker) {
+                    let value = &tag[pos + marker.len()..];
+                    let quote = if marker.ends_with('"') { '"' } else { '\'' };
+                    if let Some(end) = value.find(quote) {
+                        if let Some(url) = mediafire_zip_url(&value[..end]) {
+                            return Some(url);
                         }
                     }
                 }
             }
-
-            if let Some(value) =
-                extract_href_from_area(area)
-            {
-                return Some(value);
-            }
         }
+        remaining = &tail[end + 1..];
     }
 
-    // MediaFire zaman zaman downloadButton markup'ını değiştiriyor.
-    // Doğrudan CDN hostunu son çare olarak HTML içinde ara.
-    for marker in [
-        "https://download",
-        "https:\\/\\/download",
-    ] {
-        if let Some(start) = html.find(marker) {
-            let tail = &html[start..];
-            let mut end = tail.len();
+    // MediaFire may escape / in an embedded JSON/JS URL.
+    let normalized = html.replace("\\/", "/");
+    let mut remaining = normalized.as_str();
+    while let Some(start) = remaining.find("https://download") {
+        let tail = &remaining[start..];
+        let end = tail.find(|c: char| {
+            c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '\\' | ')' | ',')
+        }).unwrap_or(tail.len());
 
-            for separator in [
-                '"', '\'', '<', ' ', '\\',
-            ] {
-                if let Some(pos) =
-                    tail.find(separator)
-                {
-                    if pos > 8 {
-                        end = end.min(pos);
-                    }
-                }
-            }
-
-            let mut value =
-                tail[..end].replace("\\/", "/");
-
-            value =
-                decode_html_attribute(&value);
-
-            if let Ok(parsed) =
-                reqwest::Url::parse(&value)
-            {
-                let host = parsed
-                    .host_str()
-                    .unwrap_or("")
-                    .to_ascii_lowercase();
-
-                if host.ends_with(
-                    ".mediafire.com",
-                ) {
-                    return Some(value);
-                }
-            }
+        if let Some(url) = mediafire_zip_url(&tail[..end]) {
+            return Some(url);
         }
+        remaining = &tail["https://download".len()..];
     }
 
     None
@@ -729,45 +648,70 @@ fn download_once(
             && response.status()
                 == reqwest::StatusCode::PARTIAL_CONTENT;
 
+    // A resumable CDN response must start at precisely our cached byte.
+    // Otherwise appending would corrupt the archive and fail SHA-256.
+    if resumed {
+        let range = response.headers()
+            .get(reqwest::header::CONTENT_RANGE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("");
+        let valid_range = range.strip_prefix("bytes ")
+            .and_then(|s| s.split_once('/'))
+            .and_then(|(range, total)| {
+                let (start, _) = range.split_once('-')?;
+                Some((start.parse::<u64>().ok()?, total.parse::<u64>().ok()?))
+            })
+            .map(|(start, total)| start == existing && total == expected_size)
+            .unwrap_or(false);
+        if !valid_range {
+            let _ = std::fs::remove_file(target);
+            return Err(LoaderError::Other(
+                "Geçici indirme hatası: CDN Content-Range uyuşmuyor, indirme baştan denenecek.".into()
+            ));
+        }
+    }
+
+    // Reject known-wrong content lengths before opening the cache file.
+    if !resumed {
+        if let Some(length) = response.content_length() {
+            if length != expected_size {
+                let _ = std::fs::remove_file(target);
+                return Err(LoaderError::Integrity(format!(
+                    "İndirilen dosya boyutu uyuşmuyor. Beklenen: {expected_size} bayt, sunucu: {length} bayt"
+                )));
+            }
+        }
+    }
+
+    // Some HTML pages are labelled application/octet-stream. Validate the
+    // ZIP signature before writing the response to the cache.
+    let mut zip_header = [0u8; 4];
+    if !resumed {
+        response.read_exact(&mut zip_header)?;
+        if !matches!(
+            zip_header,
+            [b'P', b'K', 3, 4] | [b'P', b'K', 5, 6] | [b'P', b'K', 7, 8]
+        ) {
+            let _ = std::fs::remove_file(target);
+            return Err(LoaderError::Integrity(
+                "MediaFire ZIP yerine HTML veya ZIP olmayan içerik döndürdü.".into()
+            ));
+        }
+    }
+
     let mut output = if resumed {
-        let mut file =
-            std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(target)?;
-
-        file.seek(
-            SeekFrom::Start(existing),
-        )?;
-
+        let mut file = std::fs::OpenOptions::new()
+            .read(true).write(true).open(target)?;
+        file.seek(SeekFrom::Start(existing))?;
         file
     } else {
         File::create(target)?
     };
 
-    let mut downloaded =
-        if resumed { existing } else { 0 };
-
     if !resumed {
-        if let Some(length) =
-            response.content_length()
-        {
-            if length != expected_size {
-                let _ =
-                    std::fs::remove_file(
-                        target,
-                    );
-
-                return Err(
-                    LoaderError::Integrity(
-                        format!(
-                            "İndirilen dosya boyutu uyuşmuyor. Beklenen: {expected_size} bayt, sunucu: {length} bayt"
-                        ),
-                    ),
-                );
-            }
-        }
+        output.write_all(&zip_header)?;
     }
+    let mut downloaded = if resumed { existing } else { 4 };
 
     let mut buffer =
         [0u8; 128 * 1024];
@@ -869,15 +813,27 @@ fn download_once(
     if !actual.eq_ignore_ascii_case(
         expected_hash,
     ) {
-        let _ =
-            std::fs::remove_file(target);
-
-        return Err(
-            LoaderError::Integrity(
-                "İndirilen yama dosyasının bütünlüğü doğrulanamadı."
-                    .into(),
+        // Keep verification strict, but report enough information to
+        // distinguish a stale EXE, CDN mismatch, and a wrong manifest.
+        // Never log a signed CDN query string or token.
+        let cdn_host = response
+            .url()
+            .host_str()
+            .unwrap_or("(bilinmiyor)");
+        let _ = crate::logging::event(
+            "error",
+            "download_integrity",
+            &format!(
+                "SHA256 uyuşmazlığı: beklenen={expected_hash}; gelen={actual}; boyut={downloaded}; cdn_host={cdn_host}"
             ),
         );
+        let _ = std::fs::remove_file(target);
+
+        return Err(LoaderError::Integrity(
+            format!(
+                "İndirilen yama dosyasının bütünlüğü doğrulanamadı. Beklenen SHA256: {expected_hash}; indirilen SHA256: {actual}; boyut: {downloaded} bayt. Ayrıntılar: Loader günlüğü."
+            ),
+        ));
     }
 
     let _ = crate::logging::event(
@@ -887,4 +843,44 @@ fn download_once(
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod mediafire_resolution_tests {
+    use super::*;
+    const CDN: &str =
+        "https://download1501.mediafire.com/abcd1234/ANIMUS_AC_SHADOWS.zip";
+
+    #[test]
+    fn selects_only_download_button_href() {
+        let html = format!(
+            "<a href='https://ads.example.net/fake.zip'>Ad</a>\
+             <a href='{CDN}' id='downloadButton'>Download</a>"
+        );
+        assert_eq!(extract_mediafire_direct_url(&html), Some(CDN.into()));
+    }
+
+    #[test]
+    fn rejects_page_and_unrelated_host() {
+        assert!(extract_mediafire_direct_url(
+            "<a id='downloadButton' href='https://www.mediafire.com/file/foo/file'>x</a>"
+        ).is_none());
+        assert!(extract_mediafire_direct_url(
+            "<a id='downloadButton' href='https://download.bad.example.org/file.zip'>x</a>"
+        ).is_none());
+    }
+
+    #[test]
+    fn accepts_escaped_js_cdn_url() {
+        let escaped = CDN.replace("/", "\\/");
+        assert_eq!(extract_mediafire_direct_url(
+            &format!("var link='{escaped}';")), Some(CDN.into()));
+    }
+
+    #[test]
+    fn rejects_non_zip_cdn_url() {
+        assert!(mediafire_zip_url(
+            "https://download1501.mediafire.com/abc/payload.exe"
+        ).is_none());
+    }
 }

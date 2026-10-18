@@ -1,6 +1,8 @@
 name: Windows Tauri Release
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -80,6 +82,23 @@ jobs:
             throw "Windows release GUI subsystem attribute is missing."
           }
 
+      - name: Verify Shadows 0.1.5 build sources
+        shell: pwsh
+        run: |
+          $cargo = Get-Content -LiteralPath "loader/src-tauri/Cargo.toml" -Raw
+          $tauri = Get-Content -LiteralPath "loader/src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json
+          $cargoVersion = ([regex]::Match($cargo, '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value
+          if (-not $cargoVersion -or [version]$cargoVersion -lt [version]"0.1.5") {
+            throw "Windows Tauri Release requires Loader 0.1.5 or newer."
+          }
+          if ($tauri.version -ne $cargoVersion) {
+            throw "Cargo and Tauri versions must match."
+          }
+          $shadows = Get-Content -LiteralPath "loader/src-tauri/src/patch/shadows.rs" -Raw
+          if (-not $shadows.Contains('include_str!("shadows_install.ps1")')) {
+            throw "INSTALL_SHADOWS installer source is missing."
+          }
+
       - name: Install loader dependencies
         working-directory: loader
         run: npm ci
@@ -124,6 +143,10 @@ jobs:
               throw "Forbidden API origin remains in frontend output: $value"
             }
           }
+
+      - name: Test large FORGE hash offsets
+        shell: pwsh
+        run: ./tests/shadows-forge-int64-offset.ps1
 
       - name: Run Rust tests
         run: cargo test --manifest-path loader/src-tauri/Cargo.toml

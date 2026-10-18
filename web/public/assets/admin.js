@@ -106,7 +106,7 @@
     } catch (error) { toast(error.message, true); }
   });
 
-  const types = ['COPY_FILE','COPY_DIRECTORY','REPLACE_FILE','DELETE_FILE','DELETE_DIRECTORY','CREATE_DIRECTORY','MOVE_FILE','RENAME_FILE','APPEND_FAT_DAT','RUN_BAT'];
+  const types = ['COPY_FILE','COPY_DIRECTORY','REPLACE_FILE','DELETE_FILE','DELETE_DIRECTORY','CREATE_DIRECTORY','MOVE_FILE','RENAME_FILE','APPEND_FAT_DAT','RUN_BAT','INSTALL_SHADOWS'];
   // Yalnizca bu hash ile dogrulanan Battlefield V Install.bat desteklenir.
   const BFV_INSTALL_BAT_SHA256 = '7016526b403eff2374a2874274a29bae97fff14daa10682d230f32716d2ff463';
   const escapeAttribute = value => String(value || '').replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;');
@@ -129,6 +129,14 @@
       row.querySelector('.action-options').hidden = type !== 'APPEND_FAT_DAT';
       // Sadece kullanici RUN_BAT tipini secince varsayilanlari ata;
       // mevcut kayitlari yuklerken alanlarin uzerine yazma.
+      if (typeChanged && type === 'INSTALL_SHADOWS') {
+        row.querySelector('.action-source').value = 'MANIFEST_SHA256.txt';
+        row.querySelector('.action-destination').value = 'DataPC_boot.forge';
+        row.querySelector('.action-sha256').value = 'ee397ca77e96e0a1c53fff3cf0d26cd58b64a99cdad8c69d9ef34014d87ff6e4';
+        row.querySelector('.action-backup').checked = true;
+        row.dataset.options = '{}';
+        row.querySelector('.action-options').value = '{}';
+      }
       if (typeChanged && type === 'RUN_BAT') {
         row.querySelector('.action-source').value = 'Install.bat';
         row.querySelector('.action-destination').value = 'Install.bat';
