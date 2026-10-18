@@ -2,9 +2,7 @@ name: Windows Tauri Release
 
 on:
   push:
-    branches:
-      - main
-      - fix/mediafire-shadows-cdn-validation-20261018
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -90,8 +88,11 @@ jobs:
           $cargo = Get-Content -LiteralPath "loader/src-tauri/Cargo.toml" -Raw
           $tauri = Get-Content -LiteralPath "loader/src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json
           $cargoVersion = ([regex]::Match($cargo, '(?m)^version\s*=\s*"([^"]+)"')).Groups[1].Value
-          if ($cargoVersion -ne "0.1.5" -or $tauri.version -ne "0.1.5") {
-            throw "This Windows Tauri Release requires the Shadows 0.1.5 source branch."
+          if (-not $cargoVersion -or [version]$cargoVersion -lt [version]"0.1.5") {
+            throw "Windows Tauri Release requires Loader 0.1.5 or newer."
+          }
+          if ($tauri.version -ne $cargoVersion) {
+            throw "Cargo and Tauri versions must match."
           }
           $shadows = Get-Content -LiteralPath "loader/src-tauri/src/patch/shadows.rs" -Raw
           if (-not $shadows.Contains('include_str!("shadows_install.ps1")')) {
