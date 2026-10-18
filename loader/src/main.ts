@@ -614,6 +614,7 @@ function gameCards(games:Game[]){
     const update=installations.hasUpdate(game.id,game.patch_version);
     const orphan=installations.isOrphaned(game.id);
     const ps=psConfig(game);
+    const blocked=!meetsMinimum(state.loaderVersion,game.minimum_loader_version);
 
     if(orphan&&!ps){
       return `<article class="game-card" data-id="${game.id}"><div class="cover" style="background-image:url('${escapeHtml(cover(game))}')"><span class="access ${game.access_type}">${game.access_type==="premium"?"PREMIUM":"FREE"}</span><span class="install-badge orphan">Oyun klasörü bulunamadı</span><button>Detay →</button></div><h3>${escapeHtml(game.name)}</h3><div class="meta"><span>Kurulum kaydı var, klasör kayıp</span><b>%${game.translation_percent}</b></div><div class="progress"><i style="width:${game.translation_percent}%"></i></div></article>`;
@@ -627,11 +628,36 @@ function gameCards(games:Game[]){
       ? (game.patch_version?`Animus Emu paket ${game.patch_version}`:"Oyun paketi henüz yüklenmedi.")
       : (game.patch_version?`Yama ${game.patch_version}`:"Türkçe yama henüz yüklenmedi.");
 
-    return `<article class="game-card" data-id="${game.id}"><div class="cover" style="background-image:url('${escapeHtml(cover(game))}')"><span class="access ${game.access_type}">${ps?escapeHtml(ps.platformLabel):(game.access_type==="premium"?"PREMIUM":"FREE")}</span><span class="install-badge ${installed?"installed":""}">${badge}</span><button>Detay →</button></div><h3>${escapeHtml(game.name)}</h3><div class="meta"><span>${escapeHtml(description)}</span><b>%${game.translation_percent}</b></div><div class="progress"><i style="width:${game.translation_percent}%"></i></div></article>`;
+    // Dogrudan oyun kartindan kur/kaldir; islem her zaman mevcut guvenli
+    // install/uninstall motoruna gider, harici EXE veya script calistirilmaz.
+    const patchReady=Boolean(game.patch_version_id)&&!blocked;
+    const cardActions=ps?"":`<div class="patch-card-actions">
+        <button type="button" class="patch-card-install" data-patch-card-action="install" ${!patchReady||(Boolean(installed)&&!update)?"disabled":""} aria-label="${escapeHtml(game.name)} yamayı kur">${update?"YAMAYI GÜNCELLE":installed?"KURULU":"YAMAYI KUR"}</button>
+        <button type="button" class="patch-card-uninstall" data-patch-card-action="uninstall" ${!installed?"disabled":""} aria-label="${escapeHtml(game.name)} yamayı kaldır">YAMAYI KALDIR</button>
+      </div>`;
+    return `<article class="game-card" data-id="${game.id}"><div class="cover" style="background-image:url('${escapeHtml(cover(game))}')"><span class="access ${game.access_type}">${ps?escapeHtml(ps.platformLabel):(game.access_type==="premium"?"PREMIUM":"FREE")}</span><span class="install-badge ${installed?"installed":""}">${badge}</span><button>Detay →</button></div><h3>${escapeHtml(game.name)}</h3><div class="meta"><span>${escapeHtml(description)}</span><b>%${game.translation_percent}</b></div><div class="progress"><i style="width:${game.translation_percent}%"></i></div>${cardActions}</article>`;
   }).join("");
 }
 function renderGames(){const grid=document.querySelector("#game-grid");if(!grid)return;grid.innerHTML=gameCards(filteredGames());bindGameCards()}
-function bindGameCards(){document.querySelectorAll<HTMLElement>(".game-card").forEach(card=>card.onclick=()=>showGame(state.games.find(game=>game.id===Number(card.dataset.id))!))}
+function bindGameCards(){
+  document.querySelectorAll<HTMLElement>(".game-card").forEach(card=>{
+    const game=state.games.find(item=>item.id===Number(card.dataset.id));
+    if(!game)return;
+    card.onclick=()=>void showGame(game);
+    card.querySelectorAll<HTMLButtonElement>("[data-patch-card-action]").forEach(button=>{
+      button.onclick=async event=>{
+        event.stopPropagation();
+        if(button.disabled)return;
+        // Sunucudan guncel oyun bilgisi modal acilirken tekrar alinir.
+        await showGame(game);
+        const selected=state.selected;
+        if(!selected||selected.id!==game.id)return;
+        if(button.dataset.patchCardAction==="install")await install(selected);
+        else if(button.dataset.patchCardAction==="uninstall")await uninstall(selected);
+      };
+    });
+  });
+}
 
 async function loadGames(force=false){try{state.games=await api.games();cache.saveGames(state.games);await log("info","catalog",`${state.games.length} oyun API üzerinden yüklendi`);if(document.querySelector(".shell"))shell();if(force)notify("Katalog güncellendi")}catch{state.games=cache.readGames();await log("warning","catalog",`API kullanılamadı; ${state.games.length} önbellek kaydı gösteriliyor`);if(document.querySelector(".shell"))shell();notify("Sunucuya ulaşılamadı; önbellekteki katalog gösteriliyor.",true)}}
 
@@ -736,6 +762,13 @@ async function ensureRoot(game:Game){
     if(root)localStorage.setItem(storageKey,root);
   }
 
+  // Ilk kurulumda Steam tespiti sonuc vermezse dizin secimini hemen ac.
+  // Orphan kayit varsa yanlis klasorde uninstall/restore yapmamak icin secme.
+  if(!root&&(!record||record.root_exists)){
+    const selected=await patchService.chooseGameRoot(required);
+    if(selected){root=selected;localStorage.setItem(storageKey,root)}
+  }
+
   if(!root){
     if(record&&!record.root_exists){
       throw new Error(
@@ -766,6 +799,7 @@ async function operation(task:(root:string)=>Promise<unknown>,success:string,don
 /** Kaldırma: dosyalar elle değiştirilmişse kullanıcıya zorla seçeneği sunulur. */
 async function uninstall(game:Game){
   const ps=psConfig(game);
+  if(!confirm(`${game.name} için kurulu ${ps?"oyun paketini":"Türkçe yamayı"} kaldırıp yedeklenen dosyaları geri yüklemek istiyor musun?`))return;
   try{
     progress({stage:"prepare",percent:5,message:ps?"Oyun paketi kaldırılıyor":"Yama kaldırılıyor"});
     const root=await ensureRoot(game);
