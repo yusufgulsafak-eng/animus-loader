@@ -23,8 +23,8 @@ final class Cors
         if ($isAllowed) {
             header('Access-Control-Allow-Origin: ' . $origin);
             header('Access-Control-Allow-Credentials: true');
-            header('Access-Control-Allow-Headers: Accept, Authorization, Content-Type, X-CSRF-Token');
-            header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+            header('Access-Control-Allow-Headers: Accept, Authorization, Content-Type, X-CSRF-Token, X-Animus-Loader-Version');
+            header('Access-Control-Allow-Methods: GET, POST, DELETE, OPTIONS');
             header('Access-Control-Max-Age: 600');
         }
 
